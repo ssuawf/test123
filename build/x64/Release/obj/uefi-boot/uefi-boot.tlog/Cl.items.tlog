@@ -1,0 +1,10 @@
+C:\Users\owo\Desktop\hyperdma\uefi-boot\memset.c;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\uefi-boot\memset.obj
+C:\Users\owo\Desktop\hyperdma\uefi-boot\src\bootmgfw\bootmgfw.c;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\uefi-boot\bootmgfw.obj
+C:\Users\owo\Desktop\hyperdma\uefi-boot\src\disk\disk.c;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\uefi-boot\disk.obj
+C:\Users\owo\Desktop\hyperdma\uefi-boot\src\hooks\hooks.c;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\uefi-boot\hooks.obj
+C:\Users\owo\Desktop\hyperdma\uefi-boot\src\hvloader\hvloader.c;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\uefi-boot\hvloader.obj
+C:\Users\owo\Desktop\hyperdma\uefi-boot\src\hyperv_attachment\hyperv_attachment.c;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\uefi-boot\hyperv_attachment.obj
+C:\Users\owo\Desktop\hyperdma\uefi-boot\src\image\image.c;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\uefi-boot\image.obj
+C:\Users\owo\Desktop\hyperdma\uefi-boot\src\main.c;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\uefi-boot\main.obj
+C:\Users\owo\Desktop\hyperdma\uefi-boot\src\memory_manager\memory_manager.c;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\uefi-boot\memory_manager.obj
+C:\Users\owo\Desktop\hyperdma\uefi-boot\src\winload\winload.c;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\uefi-boot\winload.obj

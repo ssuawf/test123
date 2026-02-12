@@ -1,0 +1,17 @@
+C:\Users\owo\Desktop\hyperdma\hyperv-attachment\src\apic\apic.cpp;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\hyperv-attachment\apic.obj
+C:\Users\owo\Desktop\hyperdma\hyperv-attachment\src\arch\arch.cpp;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\hyperv-attachment\arch.obj
+C:\Users\owo\Desktop\hyperdma\hyperv-attachment\src\crt\crt.cpp;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\hyperv-attachment\crt.obj
+C:\Users\owo\Desktop\hyperdma\hyperv-attachment\src\dma\dma_handler.cpp;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\hyperv-attachment\dma_handler.obj
+C:\Users\owo\Desktop\hyperdma\hyperv-attachment\src\network\network.cpp;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\hyperv-attachment\network.obj
+C:\Users\owo\Desktop\hyperdma\hyperv-attachment\src\interrupts\interrupts.cpp;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\hyperv-attachment\interrupts.obj
+C:\Users\owo\Desktop\hyperdma\hyperv-attachment\src\main.cpp;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\hyperv-attachment\main.obj
+C:\Users\owo\Desktop\hyperdma\hyperv-attachment\src\memory_manager\heap_manager.cpp;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\hyperv-attachment\heap_manager.obj
+C:\Users\owo\Desktop\hyperdma\hyperv-attachment\src\memory_manager\memory_manager.cpp;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\hyperv-attachment\memory_manager.obj
+C:\Users\owo\Desktop\hyperdma\hyperv-attachment\src\slat\hook\amd_page_split.cpp;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\hyperv-attachment\amd_page_split.obj
+C:\Users\owo\Desktop\hyperdma\hyperv-attachment\src\slat\hook\hook.cpp;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\hyperv-attachment\hook.obj
+C:\Users\owo\Desktop\hyperdma\hyperv-attachment\src\slat\hook\hook_entry.cpp;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\hyperv-attachment\hook_entry.obj
+C:\Users\owo\Desktop\hyperdma\hyperv-attachment\src\slat\slat.cpp;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\hyperv-attachment\slat.obj
+C:\Users\owo\Desktop\hyperdma\hyperv-attachment\src\slat\cr3\cr3.cpp;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\hyperv-attachment\cr3.obj
+C:\Users\owo\Desktop\hyperdma\hyperv-attachment\src\slat\cr3\deep_copy.cpp;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\hyperv-attachment\deep_copy.obj
+C:\Users\owo\Desktop\hyperdma\hyperv-attachment\src\slat\cr3\pte.cpp;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\hyperv-attachment\pte.obj
+C:\Users\owo\Desktop\hyperdma\hyperv-attachment\src\slat\violation\violation.cpp;C:\Users\owo\Desktop\hyperdma\build\x64\Release\obj\hyperv-attachment\violation.obj
