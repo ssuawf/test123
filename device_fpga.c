@@ -1,4 +1,4 @@
-// device_fpga.c : hyper-reV UDP DMA implementation
+﻿// device_fpga.c : hyper-reV UDP DMA implementation
 // ============================================================================
 // [hyper-reV] 원본 device_fpga.c(~4000줄, 물리 FPGA USB)를 완전 교체
 // 목적: "-device fpga" 사용하는 모든 프로그램이 자동으로 hyper-reV HV에 UDP 연결
@@ -67,41 +67,41 @@ typedef struct tdDMA_MSG_HDR {
     WORD    type;           // 메시지 타입
     WORD    version;        // DMA_PROTOCOL_VERSION
     DWORD   session_id;     // 세션 ID
-} DMA_MSG_HDR, *PDMA_MSG_HDR;
+} DMA_MSG_HDR, * PDMA_MSG_HDR;
 
 // Scatter 공통 헤더 (8B)
 typedef struct tdDMA_SCATTER_HDR {
     DWORD   count;          // scatter 엔트리 수
     DWORD   cb_total;       // 전체 데이터 크기
-} DMA_SCATTER_HDR, *PDMA_SCATTER_HDR;
+} DMA_SCATTER_HDR, * PDMA_SCATTER_HDR;
 
 // Scatter 엔트리 (16B) - HV scatter_entry_t 와 동일
 typedef struct tdDMA_SCATTER_ENTRY {
     QWORD   qw_addr;        // Guest Physical Address
     DWORD   cb;             // 크기
     DWORD   f;              // 플래그
-} DMA_SCATTER_ENTRY, *PDMA_SCATTER_ENTRY;
+} DMA_SCATTER_ENTRY, * PDMA_SCATTER_ENTRY;
 
 // Open 응답 데이터
 typedef struct tdDMA_OPEN_RSP_DATA {
     QWORD   pa_max;         // Guest 최대 물리주소
     DWORD   success;        // 성공 여부
     DWORD   flags;          // 플래그
-} DMA_OPEN_RSP_DATA, *PDMA_OPEN_RSP_DATA;
+} DMA_OPEN_RSP_DATA, * PDMA_OPEN_RSP_DATA;
 
 // Write 결과
 typedef struct tdDMA_WRITE_RESULT {
     DWORD   f;              // =1이면 성공
-} DMA_WRITE_RESULT, *PDMA_WRITE_RESULT;
+} DMA_WRITE_RESULT, * PDMA_WRITE_RESULT;
 
 #pragma pack(pop)
 
 // [핵심] 컴파일 타임 검증 - sizeof 불일치시 빌드 실패
 // sizeof(DMA_MSG_HDR) != 16 이면 pragma pack 미적용 또는 타입 크기 오류
 // C11 static_assert 대신 범용 typedef 트릭 사용 (모든 C 컴파일러 호환)
-typedef char _check_sizeof_DMA_MSG_HDR     [sizeof(DMA_MSG_HDR)      == 16 ? 1 : -1];
-typedef char _check_sizeof_DMA_SCATTER_HDR [sizeof(DMA_SCATTER_HDR)  == 8  ? 1 : -1];
-typedef char _check_sizeof_DMA_SCATTER_ENTRY[sizeof(DMA_SCATTER_ENTRY)== 16 ? 1 : -1];
+typedef char _check_sizeof_DMA_MSG_HDR[sizeof(DMA_MSG_HDR) == 16 ? 1 : -1];
+typedef char _check_sizeof_DMA_SCATTER_HDR[sizeof(DMA_SCATTER_HDR) == 8 ? 1 : -1];
+typedef char _check_sizeof_DMA_SCATTER_ENTRY[sizeof(DMA_SCATTER_ENTRY) == 16 ? 1 : -1];
 
 // ============================================================================
 // 내부 컨텍스트 구조체
@@ -113,59 +113,41 @@ typedef struct tdHVDMA_CONTEXT {
     DWORD       session_id;         // 세션 ID
     QWORD       pa_max;             // Guest 최대 물리주소
     BOOL        is_connected;       // 연결 상태
-    BYTE*       send_buf;           // 송신 버퍼
+    BYTE* send_buf;           // 송신 버퍼
     DWORD       send_buf_size;
-    BYTE*       recv_buf;           // 수신 버퍼
+    BYTE* recv_buf;           // 수신 버퍼
     DWORD       recv_buf_size;
     CRITICAL_SECTION lock;          // 동기화
-} HVDMA_CONTEXT, *PHVDMA_CONTEXT;
+    // [v10.4] All-Slot Fill 975중복 패킷 필터링용
+    // HV response_seq는 매 응답마다 증가 → 이전 seq의 chunk는 stale
+    DWORD       last_accepted_seq;  // 마지막 수락한 response_seq
+} HVDMA_CONTEXT, * PHVDMA_CONTEXT;
 
 #define HVDMA_DEFAULT_PORT  28473
 
 // [핵심] 버퍼 크기: CHUNK_SIZE=32 → 한 VMEXIT에서 응답 완료
 // ============================================================================
-// 문제: CHUNK=256 → 722 UDP frames → deferred TX (8 VMEXIT 필요)
-//       deferred TX 중 RX 차단 → 다음 요청 처리 불가 → timeout
-//
-// 해결: CHUNK=32 → 89 UDP frames → MAX_CHUNKS_PER_EXIT(100) 이내
-//       → 한 VMEXIT에서 전부 전송 → deferred TX 불필요
-//       → RX 즉시 재개 → 다음 요청 바로 처리
-//
-// 성능: 172 round-trips × ~2ms = 344ms (sync 2ms/trip 검증됨)
-// 안정성: VMEXIT 빈도 무관 (1 VMEXIT = 1 응답 완료)
+// v4: CHUNK=32 → 89 UDP frames → 1 VMEXIT 완료 → 99.20 MB/s
+// v5a: 동일 CHUNK=32 + TDBAL reprogramming + keepalive
+//      CHUNK=64 시도 → 178 frames burst 중 OS Q1 kill로 실패
+//      32로 유지, 안정성 우선 확인
 // ============================================================================
-// HDR(16) + scatter_hdr(8) + 256×entry(16) + 256×4096 = 1,052,696B
-// 2MB 여유있게 할당
 #define HVDMA_BUF_SIZE      (2 * 1024 * 1024)   // 2MB
 
-// [핵심] 청크 크기: ReadScatter 1회당 요청하는 page 수
-// 요청 크기 = HDR(16) + scatter_hdr(8) + N×entry(16) = 24 + N×16
-// N=256: 요청 = 4120B (1 UDP 패킷), 응답 = ~1MB (719 UDP chunks)
-//
-// [성능 분석]
-//   N=64:  86 round-trips × 13ms = 1.1초 → HV ~1초 후 사망!
-//   N=256: 22 round-trips × 15ms = 330ms → HV 생존 ✅
-//   N=512: 11 round-trips × 28ms = 308ms → HV response_buf 2MB 필요
-//
-// [주의] HV response_buffer ≥ N×4KB+4KB 필요
-//   N=256 → 1028KB → HV RESPONSE_PAGES=512 (2MB) 필요
-#define HVDMA_CHUNK_SIZE    32
+#define HVDMA_CHUNK_SIZE    32  // multi-buffer batch TX 후 재평가 예정
 
-// [핵심] 파이프라이닝: 응답을 기다리지 않고 W개 요청을 연속 발사
-// HV TX ring = 16 descriptors, 1 shared data buffer
-// W>1이면 TX ring overflow 위험 → stop-and-wait (W=1) 유지
-// Phase 2 (multi-buffer TX ring) 구현 후 W=4+ 가능
+// [v5] 파이프라이닝: single buffer → W=1 (stop-and-wait)
+// dual-buffer는 16 desc ring에서 포화 → 실패
+// 200MB/s 달성 시: 별도 페이지에 128 desc + 16 buffer 필요
 #define HVDMA_PIPELINE_WINDOW   1
 
 // UDP 재시도 설정
 #define HVDMA_MAX_RETRIES       1
-// [핵심] CHUNK_SIZE=32: 응답 89 UDP frames (1.1ms) → 한 VMEXIT 완료, deferred TX 불필요
-// 안전 마진 포함 500ms. 이전 300ms에서 증가
-// [핵심] 개별 chunk timeout
-// 정상 응답: ~2ms, backoff sleep이 stall recovery 담당
-// 50ms: 정상에 25배 마진, OPEN 핸드셰이크도 50ms면 충분
-// 5 retries × (backoff + 50ms timeout) = 최대 1.1초/chunk
-#define HVDMA_RECV_TIMEOUT      50
+// [핵심 v5] Intel I225-V 최적화 - 공격적 timeout 단축
+// 정상 응답: 1-5ms, 50ms는 과잉 → 15ms로 단축 (Windows timer 1tick)
+// retry: 1회만 (실패 즉시 stall 후보, 연속 2실패=stall 확정)
+// 총 stall 감지: 2 chunks × 15ms = 30ms (was 200ms)
+#define HVDMA_RECV_TIMEOUT      15
 #define HVDMA_OPEN_MAX_RETRIES  30
 #define HVDMA_OPEN_RECV_TIMEOUT 200
 
@@ -202,12 +184,12 @@ typedef struct {
     WORD chunk_total;       // 총 chunk 수
     DWORD total_size;       // 전체 응답 크기 (chunk_hdr 제외)
     DWORD response_seq;     // 응답 시퀀스 번호 (HV가 매 응답 증가, 크로스오염 방지)
-} CHUNK_HDR, *PCHUNK_HDR;
+} CHUNK_HDR, * PCHUNK_HDR;
 #pragma pack(pop)
 
 #define CHUNK_HDR_SIZE      12
 #define CHUNK_DATA_MAX      1460    // MTU(1500) - IP(20) - UDP(8) - chunk_hdr(12)
-#define CHUNK_BURST_TIMEOUT 50      // ms - chunk간 대기 (Windows timer resolution ~15ms)
+#define CHUNK_BURST_TIMEOUT 10      // ms - chunk간 대기 (정상: <2ms 도착)
 
 // 단일 chunk 수신 (OPEN/CLOSE/PING 등 소형 응답)
 // chunk_hdr를 벗기고 data만 버퍼에 넣음
@@ -216,13 +198,13 @@ static BOOL _UdpRecvSingle(PHVDMA_CONTEXT ctx, BYTE* pb, DWORD cb_max, DWORD* pc
     BYTE chunk_buf[1500];
     int ret = recv(ctx->sock, (char*)chunk_buf, sizeof(chunk_buf), 0);
     if (ret < (int)CHUNK_HDR_SIZE) return FALSE;
-    
+
     DWORD data_size = (DWORD)ret - CHUNK_HDR_SIZE;
     if (data_size > cb_max) data_size = cb_max;
-    
+
     memcpy(pb, chunk_buf + CHUNK_HDR_SIZE, data_size);
     *pcb_received = data_size;
-    
+
     if (data_size < sizeof(DMA_MSG_HDR)) return FALSE;
     PDMA_MSG_HDR hdr = (PDMA_MSG_HDR)pb;
     if (hdr->magic != DMA_PROTOCOL_MAGIC) return FALSE;
@@ -241,82 +223,93 @@ static BOOL _DmaRoundTrip(
 {
     // 요청 전송
     if (!_UdpSend(ctx, req, req_size)) return FALSE;
-    
+
     BYTE chunk_buf[1500];
     WORD total_chunks = 0;
     DWORD total_size = 0;
     DWORD response_seq = 0;     // chunk 0의 seq → 이 seq만 수락
     WORD chunks_received = 0;
     int stale_skipped = 0;
-    
+
     // 첫 chunk: HV 처리 + stale skip 시간 포함
     DWORD timeout = HVDMA_RECV_TIMEOUT;
     setsockopt(ctx->sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
-    
+
     // Phase 1: chunk_index==0 찾기 (stale skip)
     // [핵심] chunk_index!=0 OR 이전 response_seq의 chunk 0 → skip
+    // [v10.4] All-Slot Fill: 975 중복 → response_seq <= last_accepted 도 skip!
     // 최신 chunk 0 (가장 높은 seq) 를 원하지만, 먼저 만나는 chunk 0 수락
     for (;;)
     {
         int ret = recv(ctx->sock, (char*)chunk_buf, sizeof(chunk_buf), 0);
         if (ret < (int)CHUNK_HDR_SIZE) {
-            printf("[HVDMA-RT] timeout waiting for chunk0 (skipped %d stale)\n", stale_skipped);
-            fflush(stdout);
+            static int rt_timeout_count = 0;
+            rt_timeout_count++;
+            if (rt_timeout_count <= 20 || (rt_timeout_count % 100) == 0) {
+                printf("[HVDMA-RT] timeout chunk0 (stale=%d) [#%d]\n", stale_skipped, rt_timeout_count);
+                fflush(stdout);
+            }
             return FALSE;
         }
-        
+
         PCHUNK_HDR chdr = (PCHUNK_HDR)chunk_buf;
-        
+
         // stale chunk: 이전 응답의 잔여 → skip
         if (chdr->chunk_index != 0) {
             stale_skipped++;
             continue;
         }
-        
+
+        // [v10.4] 이전 response_seq의 duplicate → skip (All-Slot Fill 975중복 방어)
+        if (ctx->last_accepted_seq > 0 && chdr->response_seq <= ctx->last_accepted_seq) {
+            stale_skipped++;
+            continue;
+        }
+
         // chunk 0 도착 → 응답 시작!
         total_chunks = chdr->chunk_total;
         total_size = chdr->total_size;
         response_seq = chdr->response_seq;
-        
+
         DWORD chunk_data_size = (DWORD)ret - CHUNK_HDR_SIZE;
         if (chunk_data_size <= rsp_max) {
             memcpy(rsp, chunk_buf + CHUNK_HDR_SIZE, chunk_data_size);
         }
         chunks_received = 1;
-        
+
         if (stale_skipped > 0) {
             printf("[HVDMA-RT] skipped %d stale, seq=%d total=%d size=%d\n",
-                   stale_skipped, response_seq, total_chunks, total_size);
+                stale_skipped, response_seq, total_chunks, total_size);
             fflush(stdout);
         }
         break;
     }
-    
+
     // 단일 chunk 응답 (OPEN 등 소형)
     if (total_chunks <= 1) goto done;
-    
+
     // Phase 2: 나머지 chunks 수신 (burst mode, response_seq 일치만 수락)
     timeout = CHUNK_BURST_TIMEOUT;
     setsockopt(ctx->sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
-    
+
     while (chunks_received < total_chunks)
     {
         int ret = recv(ctx->sock, (char*)chunk_buf, sizeof(chunk_buf), 0);
         if (ret < (int)CHUNK_HDR_SIZE) break;  // burst 끝
-        
+
         PCHUNK_HDR chdr = (PCHUNK_HDR)chunk_buf;
-        
+
         // [핵심] 다른 response_seq → 다른 응답의 chunk → skip
         if (chdr->response_seq != response_seq) continue;
-        
+
         DWORD chunk_data_size = (DWORD)ret - CHUNK_HDR_SIZE;
-        
+
         // chunk 데이터를 올바른 offset에 배치
         DWORD offset = (DWORD)chdr->chunk_index * CHUNK_DATA_MAX;
         if (offset + chunk_data_size <= rsp_max) {
             memcpy(rsp + offset, chunk_buf + CHUNK_HDR_SIZE, chunk_data_size);
         }
-        
+
         chunks_received++;
     }
 
@@ -324,7 +317,7 @@ done:
     // timeout 복원
     timeout = HVDMA_RECV_TIMEOUT;
     setsockopt(ctx->sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
-    
+
     // [핵심] PARTIAL → FALSE 유지
     // scatter read response에서 chunk 누락 → 해당 MEM entry가 0으로 남음
     // → LeechCore가 "성공적으로 읽은 0"으로 간주 → BAD DTB, ntoskrnl 못 찾음
@@ -334,10 +327,10 @@ done:
         fflush(stdout);
         return FALSE;
     }
-    
+
     // 응답 크기 설정
     *pcb_rsp = (total_size <= rsp_max) ? total_size : rsp_max;
-    
+
     // DMA 헤더 검증
     if (*pcb_rsp < sizeof(DMA_MSG_HDR)) {
         printf("[HVDMA-RT] rsp too small: %d < %d\n", *pcb_rsp, (int)sizeof(DMA_MSG_HDR));
@@ -353,7 +346,10 @@ done:
         fflush(stdout);
         return FALSE;
     }
-    
+
+    // [v10.4] 수락된 seq 기록 → 다음 호출에서 이전 seq 중복 skip
+    ctx->last_accepted_seq = response_seq;
+
     return TRUE;
 }
 
@@ -384,8 +380,8 @@ static BOOL _DmaOpen(PHVDMA_CONTEXT ctx)
     // 만약 poll race로 실패해도 30회까지 재시도
     DWORD old_timeout = HVDMA_RECV_TIMEOUT;
     DWORD open_timeout = HVDMA_OPEN_RECV_TIMEOUT;
-    setsockopt(ctx->sock, SOL_SOCKET, SO_RCVTIMEO, 
-               (const char*)&open_timeout, sizeof(open_timeout));
+    setsockopt(ctx->sock, SOL_SOCKET, SO_RCVTIMEO,
+        (const char*)&open_timeout, sizeof(open_timeout));
 
     BOOL success = FALSE;
     DWORD cb_recv = 0;
@@ -411,17 +407,32 @@ static BOOL _DmaOpen(PHVDMA_CONTEXT ctx)
         ctx->session_id = rsp_hdr->session_id;
         ctx->pa_max = rsp_data->pa_max;
         ctx->is_connected = TRUE;
+        ctx->last_accepted_seq = 0;  // [v10.4] seq 필터 초기화
         success = TRUE;
 
         printf("[HVDMA-OPEN] SUCCESS on attempt %d! session=0x%08X pa_max=0x%llX\n",
-               attempt + 1, ctx->session_id, (unsigned long long)ctx->pa_max);
+            attempt + 1, ctx->session_id, (unsigned long long)ctx->pa_max);
         fflush(stdout);
+
+        // [v10.4] OPEN 성공 후 소켓 drain: All-Slot Fill 974개 잔여 패킷 제거
+        // non-blocking recv로 소켓 버퍼 비우기 → ReadScatter stale 방지
+        {
+            DWORD drain_timeout = 1;  // 1ms non-blocking
+            setsockopt(ctx->sock, SOL_SOCKET, SO_RCVTIMEO,
+                (const char*)&drain_timeout, sizeof(drain_timeout));
+            BYTE drain_buf[1500];
+            int drain_count = 0;
+            while (recv(ctx->sock, (char*)drain_buf, sizeof(drain_buf), 0) > 0)
+                drain_count++;
+            if (drain_count > 0)
+                printf("[HVDMA-OPEN] drained %d stale packets from socket\n", drain_count);
+        }
         break;
     }
 
     // recv timeout 복원 (ReadScatter용)
     setsockopt(ctx->sock, SOL_SOCKET, SO_RCVTIMEO,
-               (const char*)&old_timeout, sizeof(old_timeout));
+        (const char*)&old_timeout, sizeof(old_timeout));
 
     return success;
 }
@@ -469,7 +480,7 @@ static BOOL _SendScatterRequest(
     DWORD chunk_count)
 {
     DWORD req_size = sizeof(DMA_MSG_HDR) + sizeof(DMA_SCATTER_HDR)
-                   + chunk_count * sizeof(DMA_SCATTER_ENTRY);
+        + chunk_count * sizeof(DMA_SCATTER_ENTRY);
 
     if (req_size > ctx->send_buf_size) return FALSE;
 
@@ -518,6 +529,7 @@ static BOOL _RecvDmaResponse(
 
     // Phase 1: chunk_index==0 찾기
     // [파이프라이닝] 이전 응답의 잔여 chunk가 있을 수 있음 → skip
+    // [v10.4] All-Slot Fill: 975 중복 → response_seq <= last_accepted 도 skip!
     DWORD timeout = HVDMA_RECV_TIMEOUT;
     setsockopt(ctx->sock, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout, sizeof(timeout));
 
@@ -525,13 +537,25 @@ static BOOL _RecvDmaResponse(
     {
         int ret = recv(ctx->sock, (char*)chunk_buf, sizeof(chunk_buf), 0);
         if (ret < (int)CHUNK_HDR_SIZE) {
-            printf("[PIPE-RECV] timeout waiting chunk0 (skipped %d stale)\n", stale_skipped);
-            fflush(stdout);
+            // [v5] 로그 스팸 방지: 초기 20회 + 이후 100회마다 1회
+            static int timeout_count = 0;
+            timeout_count++;
+            if (timeout_count <= 20 || (timeout_count % 100) == 0) {
+                printf("[PIPE-RECV] timeout waiting chunk0 (skipped %d stale) [#%d]\n",
+                    stale_skipped, timeout_count);
+                fflush(stdout);
+            }
             return FALSE;
         }
 
         PCHUNK_HDR chdr = (PCHUNK_HDR)chunk_buf;
         if (chdr->chunk_index != 0) {
+            stale_skipped++;
+            continue;
+        }
+
+        // [v10.4] 이전 response_seq의 duplicate → skip
+        if (ctx->last_accepted_seq > 0 && chdr->response_seq <= ctx->last_accepted_seq) {
             stale_skipped++;
             continue;
         }
@@ -586,6 +610,9 @@ done:
     PDMA_MSG_HDR hdr = (PDMA_MSG_HDR)rsp;
     if (hdr->magic != DMA_PROTOCOL_MAGIC) return FALSE;
 
+    // [v10.4] 수락된 seq 기록 → 다음 호출에서 이전 seq 중복 skip
+    ctx->last_accepted_seq = response_seq;
+
     return TRUE;
 }
 
@@ -606,7 +633,7 @@ static BOOL _ParseScatterResponse(
     PDMA_MSG_HDR rsp_hdr = (PDMA_MSG_HDR)ctx->recv_buf;
     if (rsp_hdr->type != DMA_MSG_READ_SCATTER_RSP) {
         printf("[PIPE-ERR#%d] type mismatch: got %d expect %d\n",
-               s_pipeline_call, rsp_hdr->type, DMA_MSG_READ_SCATTER_RSP);
+            s_pipeline_call, rsp_hdr->type, DMA_MSG_READ_SCATTER_RSP);
         fflush(stdout);
         return FALSE;
     }
@@ -614,7 +641,7 @@ static BOOL _ParseScatterResponse(
     PDMA_SCATTER_HDR rsp_scatter = (PDMA_SCATTER_HDR)(ctx->recv_buf + sizeof(DMA_MSG_HDR));
     if (rsp_scatter->count != chunk_count) {
         printf("[PIPE-ERR#%d] count mismatch: rsp=%d req=%d\n",
-               s_pipeline_call, rsp_scatter->count, chunk_count);
+            s_pipeline_call, rsp_scatter->count, chunk_count);
         fflush(stdout);
         return FALSE;
     }
@@ -623,7 +650,7 @@ static BOOL _ParseScatterResponse(
         ctx->recv_buf + sizeof(DMA_MSG_HDR) + sizeof(DMA_SCATTER_HDR));
 
     BYTE* data_ptr = ctx->recv_buf + sizeof(DMA_MSG_HDR) + sizeof(DMA_SCATTER_HDR)
-                   + chunk_count * sizeof(DMA_SCATTER_ENTRY);
+        + chunk_count * sizeof(DMA_SCATTER_ENTRY);
 
     DWORD data_offset = 0;
     DWORD f_ok = 0, f_fail = 0, all_zero_pages = 0, bounds_fail = 0;
@@ -645,34 +672,47 @@ static BOOL _ParseScatterResponse(
                 for (DWORD z = 0; z < cb && is_zero; z += 64)
                     if (*(QWORD*)(pMEM->pb + z) != 0) is_zero = FALSE;
                 if (is_zero) all_zero_pages++;
-            } else {
+            }
+            else {
                 bounds_fail++;
                 if (bounds_fail <= 3) {
                     printf("[PIPE-BOUNDS#%d] i=%d PA=%016llX data_end=%d cb_recv=%d cb=%d pMEM_cb=%d\n",
-                           s_pipeline_call, i, pMEM->qwA, data_end, cb_recv, cb, pMEM->cb);
+                        s_pipeline_call, i, pMEM->qwA, data_end, cb_recv, cb, pMEM->cb);
                     fflush(stdout);
                 }
             }
-        } else {
+        }
+        else {
             f_fail++;
         }
     }
 
     // [진단] 첫 10개 + 에러시 상세 출력
-    if (s_pipeline_call <= 10 || bounds_fail > 0) {
+    if (s_pipeline_call <= 10 || bounds_fail > 0 || f_fail > 0) {
         printf("[PIPE-DATA#%d] f_ok=%d f_fail=%d all_zero=%d bounds_fail=%d\n",
-               s_pipeline_call, f_ok, f_fail, all_zero_pages, bounds_fail);
+            s_pipeline_call, f_ok, f_fail, all_zero_pages, bounds_fail);
         if (s_pipeline_call <= 10) {
             for (DWORD i = 0; i < chunk_count && i < 3; i++) {
                 DWORD orig_idx = valid_map[chunk_start + i];
                 PMEM_SCATTER pMEM = ppMEMs[orig_idx];
                 if (pMEM->f) {
                     printf("  PA=%016llX: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X\n",
-                           pMEM->qwA,
-                           pMEM->pb[0], pMEM->pb[1], pMEM->pb[2], pMEM->pb[3],
-                           pMEM->pb[4], pMEM->pb[5], pMEM->pb[6], pMEM->pb[7],
-                           pMEM->pb[8], pMEM->pb[9], pMEM->pb[10], pMEM->pb[11],
-                           pMEM->pb[12], pMEM->pb[13], pMEM->pb[14], pMEM->pb[15]);
+                        pMEM->qwA,
+                        pMEM->pb[0], pMEM->pb[1], pMEM->pb[2], pMEM->pb[3],
+                        pMEM->pb[4], pMEM->pb[5], pMEM->pb[6], pMEM->pb[7],
+                        pMEM->pb[8], pMEM->pb[9], pMEM->pb[10], pMEM->pb[11],
+                        pMEM->pb[12], pMEM->pb[13], pMEM->pb[14], pMEM->pb[15]);
+                }
+            }
+        }
+        // [DIAG] f_fail pages - which PA failed to map? (fires for ALL chunks)
+        if (f_fail > 0) {
+            for (DWORD i = 0; i < chunk_count; i++) {
+                DWORD orig_idx = valid_map[chunk_start + i];
+                PMEM_SCATTER pMEM = ppMEMs[orig_idx];
+                if (!pMEM->f) {
+                    printf("  >>> FAIL PA=%016llX (cb=%d) - HV EPT map failed\n",
+                        pMEM->qwA, pMEM->cb);
                 }
             }
         }
@@ -698,13 +738,11 @@ static BOOL _ReadScatterChunkSync(
 {
     int retry;
     DWORD cb_recv = 0;
-    // [핵심] progressive backoff: 짧게 시작 → stall 지속시 길게 대기
-    static const DWORD backoff_ms[] = { 0, 50, 100, 200, 500 };
+    // [FIX v5] retry 2→1: 15ms timeout 1회로 충분
+    // 정상이면 <5ms에 응답. 15ms timeout = 실패 확정.
+    // stall detection: 연속 2 chunk 실패 = 2×15ms = 30ms에 확정
 
-    for (retry = 0; retry < 5; retry++) {
-        if (retry > 0) {
-            Sleep(backoff_ms[retry]);
-        }
+    for (retry = 0; retry < 1; retry++) {
         if (!_SendScatterRequest(ctx, ppMEMs, valid_map, chunk_start, chunk_count))
             continue;
 
@@ -738,7 +776,7 @@ VOID DeviceFPGA_ReadScatter(
 {
     static int s_scatter_call = 0;
     s_scatter_call++;
-    
+
     // [진단] 고해상도 타이밍 - 파이프라이닝 효과 측정
     LARGE_INTEGER t_start, t_end, freq;
     QueryPerformanceCounter(&t_start);
@@ -786,43 +824,75 @@ VOID DeviceFPGA_ReadScatter(
     {
         // 실패 chunk 기록용 배열 (최대 num_chunks)
         DWORD* failed_offsets = (DWORD*)malloc(num_chunks * sizeof(DWORD));
-        DWORD* failed_counts  = (DWORD*)malloc(num_chunks * sizeof(DWORD));
+        DWORD* failed_counts = (DWORD*)malloc(num_chunks * sizeof(DWORD));
         DWORD fail_count = 0;
         DWORD pass1_ok = 0;
 
         // === Pass 1: 전체 스캔 ===
+        // [v5] HV가 매 VMEXIT마다 TXDCTL keepalive 실행
+        // → OS의 Q1 kill이 즉시(~μs) 복구됨 → stall 거의 불가능
+        // throttle은 안전장치로 200 chunks마다만 (이전: 50)
+        DWORD consecutive_fails = 0;
+        BOOL tx_stall_detected = FALSE;
+        DWORD chunks_since_pause = 0;
         DWORD offset = 0;
         while (offset < cValid) {
             DWORD chunk = cValid - offset;
             if (chunk > HVDMA_CHUNK_SIZE) chunk = HVDMA_CHUNK_SIZE;
-            if (_ReadScatterChunkSync(ctx, ppMEMs, valid_map, offset, chunk)) {
-                pass1_ok++;
-            } else {
-                // 실패 기록 (stall 중일 가능성)
+
+            if (tx_stall_detected) {
                 if (failed_offsets && failed_counts) {
                     failed_offsets[fail_count] = offset;
-                    failed_counts[fail_count]  = chunk;
+                    failed_counts[fail_count] = chunk;
                     fail_count++;
+                }
+            }
+            else if (_ReadScatterChunkSync(ctx, ppMEMs, valid_map, offset, chunk)) {
+                pass1_ok++;
+                consecutive_fails = 0;
+                chunks_since_pause++;
+                // [v4] throttle Sleep 제거 — Sleep(1)은 15ms 소모
+                // HV keepalive + inject DD wait가 TX ring 관리
+                // if (chunks_since_pause >= 200) {
+                //     Sleep(1);
+                //     chunks_since_pause = 0;
+                // }
+            }
+            else {
+                consecutive_fails++;
+                if (failed_offsets && failed_counts) {
+                    failed_offsets[fail_count] = offset;
+                    failed_counts[fail_count] = chunk;
+                    fail_count++;
+                }
+                // 연속 2회 실패 = TX stall 확정 → 즉시 나머지 스킵
+                if (consecutive_fails >= 2) {
+                    tx_stall_detected = TRUE;
+                    if (s_scatter_call <= 20) {
+                        printf("[PIPE] TX stall detected at chunk %d/%d, skipping to Pass2\n",
+                            pass1_ok + fail_count, num_chunks);
+                        fflush(stdout);
+                    }
                 }
             }
             offset += chunk;
         }
 
-        // === Pass 2: 실패한 chunks 재시도 (stall 해소 후) ===
+        // === Pass 2: 실패한 chunks 즉시 재시도 ===
+        // [v4] Sleep 제거: HV가 inject 진입 시 TXDCTL 사전체크→자동복구
+        // 클라이언트는 재요청만 보내면 됨 (HV recovery = ~10μs, 대기 불필요)
         DWORD pass2_ok = 0;
         if (fail_count > 0) {
-            // stall 완전 해소 대기 (1초)
-            Sleep(1000);
             DWORD i;
             for (i = 0; i < fail_count; i++) {
                 if (_ReadScatterChunkSync(ctx, ppMEMs, valid_map,
-                        failed_offsets[i], failed_counts[i])) {
+                    failed_offsets[i], failed_counts[i])) {
                     pass2_ok++;
                 }
             }
             if (s_scatter_call <= 20) {
-                printf("[PIPE] Pass2 recovery: %d/%d chunks recovered\n",
-                       pass2_ok, fail_count);
+                printf("[PIPE] Pass2 recovery: %d/%d chunks recovered (immediate retry)\n",
+                    pass2_ok, fail_count);
                 fflush(stdout);
             }
         }
@@ -834,8 +904,44 @@ VOID DeviceFPGA_ReadScatter(
         double ms = (double)(t_end.QuadPart - t_start.QuadPart) * 1000.0 / freq.QuadPart;
         if (s_scatter_call <= 20) {
             printf("[PIPE] ReadScatter #%d SYNC: %d pages in %.1fms (%.0f pages/sec) [p1=%d p2=%d/%d]\n",
-                   s_scatter_call, cValid, ms, cValid * 1000.0 / ms,
-                   pass1_ok, pass2_ok, fail_count);
+                s_scatter_call, cValid, ms, cValid * 1000.0 / ms,
+                pass1_ok, pass2_ok, fail_count);
+
+            // [DIAG-AGG] Per-ReadScatter aggregate: 전체 페이지 f 상태 확인
+            // EPROCESS #5 디버깅: 모든 chunk 성공인데 walk 실패 → 데이터 내용 문제 추적
+            // f_total: f=1인 페이지 수, zero_total: f=1이지만 데이터 전부 0인 페이지 수
+            // unmapped: f=0인 페이지 수 (EPT에 없는 GPA)
+            DWORD f_total = 0, zero_total = 0, unmapped_total = 0;
+            for (DWORD vi = 0; vi < cValid; vi++) {
+                PMEM_SCATTER pM = ppMEMs[valid_map[vi]];
+                if (pM->f) {
+                    f_total++;
+                    BOOL is_z = TRUE;
+                    for (DWORD z = 0; z < pM->cb && is_z; z += 64)
+                        if (*(QWORD*)(pM->pb + z) != 0) is_z = FALSE;
+                    if (is_z) zero_total++;
+                }
+                else {
+                    unmapped_total++;
+                }
+            }
+            printf("[DIAG-AGG#%d] total=%d mapped=%d(%.1f%%) unmapped=%d zero_pages=%d(%.1f%%)\n",
+                s_scatter_call, cValid, f_total, f_total * 100.0 / cValid,
+                unmapped_total, zero_total, zero_total * 100.0 / cValid);
+
+            // 첫 10개 unmapped PA 출력 (어떤 GPA가 EPT에 없는지)
+            if (unmapped_total > 0) {
+                DWORD shown = 0;
+                for (DWORD vi = 0; vi < cValid && shown < 10; vi++) {
+                    PMEM_SCATTER pM = ppMEMs[valid_map[vi]];
+                    if (!pM->f) {
+                        printf("  [UNMAPPED] PA=%016llX cb=%d\n", pM->qwA, pM->cb);
+                        shown++;
+                    }
+                }
+                if (unmapped_total > 10)
+                    printf("  ... and %d more unmapped pages\n", unmapped_total - 10);
+            }
             fflush(stdout);
         }
         free(valid_map);
@@ -845,7 +951,7 @@ VOID DeviceFPGA_ReadScatter(
 
     // [파이프라이닝] Window 단위로 처리
     printf("[PIPE] ReadScatter #%d: cpMEMs=%d valid=%d chunks=%d window=%d\n",
-           s_scatter_call, cpMEMs, cValid, num_chunks, HVDMA_PIPELINE_WINDOW);
+        s_scatter_call, cpMEMs, cValid, num_chunks, HVDMA_PIPELINE_WINDOW);
     fflush(stdout);
 
     DWORD total_ok = 0, total_fail = 0;
@@ -906,7 +1012,8 @@ VOID DeviceFPGA_ReadScatter(
                 total_ok++;
                 window_ok++;
                 consecutive_fail = 0;
-            } else {
+            }
+            else {
                 total_fail++;
                 consecutive_fail++;
                 // [핵심] 5회 연속 실패 시에만 HV 사망 판정
@@ -920,20 +1027,22 @@ VOID DeviceFPGA_ReadScatter(
                 break;  // window 나머지 포기 (다음 window에서 재시도)
             }
         }
-        
-        // [핵심] Window 간 TX ring drain 대기
-        // HV가 이전 응답의 TX 완료할 시간 확보 (1ms = ~1000 UDP 패킷 처리 가능)
-        if (!hv_dead && base + HVDMA_PIPELINE_WINDOW < num_chunks) {
-            Sleep(1);
-        }
+
+        // [v4] Window간 대기 제거 — Sleep(1)은 Windows에서 ~15ms 소모
+        // PIPELINE_WINDOW=1이면 매 chunk마다 15ms = 216 chunks × 15ms = 3.4초!
+        // 6.40 MB/s 원인. 제거 시 99 MB/s 달성.
+        // TX ring drain은 HV inject의 DD wait가 자체 처리함
+        // if (!hv_dead && base + HVDMA_PIPELINE_WINDOW < num_chunks) {
+        //     Sleep(1);
+        // }
     }
 
     if (total_fail > 0 || s_scatter_call <= 5) {
         printf("[PIPE] ReadScatter #%d DONE: %d/%d chunks OK\n",
-               s_scatter_call, total_ok, num_chunks);
+            s_scatter_call, total_ok, num_chunks);
         fflush(stdout);
     }
-    
+
     // [핵심] HV 사망 감지 후 소켓 drain → 다음 ReadScatter 호출 준비
     // stale 응답이 커널 버퍼에 남아있을 수 있음
     if (hv_dead) {
@@ -949,14 +1058,14 @@ VOID DeviceFPGA_ReadScatter(
             fflush(stdout);
         }
     }
-    
+
     // [진단] 타이밍: 파이프라이닝 효과 측정
     QueryPerformanceCounter(&t_end);
     double ms = (double)(t_end.QuadPart - t_start.QuadPart) * 1000.0 / freq.QuadPart;
     if (s_scatter_call <= 20 || ms > 2000.0) {
         double mbps = (cValid * 4096.0 / 1024.0 / 1024.0) / (ms / 1000.0);
         printf("[PIPE] ReadScatter #%d TIME: %d pages (%.1fMB) in %.1fms = %.1f MB/s\n",
-               s_scatter_call, cValid, cValid * 4096.0 / 1024.0 / 1024.0, ms, mbps);
+            s_scatter_call, cValid, cValid * 4096.0 / 1024.0 / 1024.0, ms, mbps);
         fflush(stdout);
     }
 
@@ -984,10 +1093,10 @@ static BOOL _WriteScatterChunk(
         DWORD orig_idx = valid_map[chunk_start + i];
         data_size += ppMEMs[orig_idx]->cb;
     }
-    
+
     DWORD req_size = sizeof(DMA_MSG_HDR) + sizeof(DMA_SCATTER_HDR)
-                   + entries_size + data_size;
-    
+        + entries_size + data_size;
+
     if (req_size > ctx->send_buf_size) return FALSE;
 
     PDMA_MSG_HDR req_hdr = (PDMA_MSG_HDR)ctx->send_buf;
@@ -1006,7 +1115,7 @@ static BOOL _WriteScatterChunk(
 
     BYTE* data_ptr = ctx->send_buf + sizeof(DMA_MSG_HDR) + sizeof(DMA_SCATTER_HDR) + entries_size;
     DWORD data_offset = 0;
-    
+
     for (DWORD i = 0; i < chunk_count; i++)
     {
         DWORD orig_idx = valid_map[chunk_start + i];
@@ -1020,7 +1129,7 @@ static BOOL _WriteScatterChunk(
 
     DWORD cb_recv = 0;
     BOOL rt_ok = _DmaRoundTrip(ctx, ctx->send_buf, req_size,
-                        ctx->recv_buf, ctx->recv_buf_size, &cb_recv);
+        ctx->recv_buf, ctx->recv_buf_size, &cb_recv);
     if (!rt_ok) return FALSE;
 
     // Write 응답 파싱: 각 엔트리의 성공 여부
@@ -1166,7 +1275,7 @@ BOOL DeviceFPGA_Command(
     _In_ QWORD fOption,
     _In_ DWORD cbDataIn,
     _In_reads_opt_(cbDataIn) PBYTE pbDataIn,
-    _Out_opt_ PBYTE *ppbDataOut,
+    _Out_opt_ PBYTE* ppbDataOut,
     _Out_opt_ PDWORD pcbDataOut)
 {
     // FPGA Command 기능 미지원 (PCIe config space 등)
@@ -1241,7 +1350,8 @@ static BOOL _ReadConfigFile(_Out_ CHAR szIP[64], _Out_ PWORD pwPort)
         memcpy(szIP, line, ip_len);
         szIP[ip_len] = 0;
         *pwPort = (WORD)atoi(colon + 1);
-    } else {
+    }
+    else {
         strcpy_s(szIP, 64, line);
         *pwPort = HVDMA_DEFAULT_PORT;
     }
@@ -1291,7 +1401,8 @@ static BOOL _ParseConnectionString(
         memcpy(szIP, p, ip_len);
         szIP[ip_len] = 0;
         *pwPort = (WORD)atoi(colon + 1);
-    } else {
+    }
+    else {
         size_t ip_len = strlen(p);
         if (ip_len >= 64) return FALSE;
         strcpy_s(szIP, 64, p);
@@ -1318,14 +1429,14 @@ static SOCKET _UdpCreate(LPCSTR szIP, WORD wPort)
     // Windows는 이걸 connected UDP 소켓에 전달 → recvfrom() = error 10054
     // SIO_UDP_CONNRESET=FALSE로 설정하면 이 ICMP 에러를 소켓에 전달하지 않음
     // → recvfrom()은 정상적으로 HV 응답을 기다림
-    #ifndef SIO_UDP_CONNRESET
-    #define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
-    #endif
+#ifndef SIO_UDP_CONNRESET
+#define SIO_UDP_CONNRESET _WSAIOW(IOC_VENDOR, 12)
+#endif
     {
         BOOL bNewBehavior = FALSE;
         DWORD dwBytesReturned = 0;
         WSAIoctl(sock, SIO_UDP_CONNRESET, &bNewBehavior, sizeof(bNewBehavior),
-                 NULL, 0, &dwBytesReturned, NULL, NULL);
+            NULL, 0, &dwBytesReturned, NULL, NULL);
     }
 
     DWORD timeout = HVDMA_RECV_TIMEOUT;
@@ -1349,6 +1460,44 @@ static SOCKET _UdpCreate(LPCSTR szIP, WORD wPort)
         return INVALID_SOCKET;
     }
     return sock;
+}
+
+// ============================================================================
+// [진단용] 단일 PA 페이지 읽기 헬퍼
+// Post-Open 진단에서 페이지테이블 walk에 사용
+// ============================================================================
+static BOOL _DiagReadPage(PHVDMA_CONTEXT ctx, QWORD pa, BYTE* out_page)
+{
+    DWORD req_sz = sizeof(DMA_MSG_HDR) + sizeof(DMA_SCATTER_HDR) + sizeof(DMA_SCATTER_ENTRY);
+    PDMA_MSG_HDR h = (PDMA_MSG_HDR)ctx->send_buf;
+    h->magic = DMA_PROTOCOL_MAGIC;
+    h->cb_msg = req_sz;
+    h->type = DMA_MSG_READ_SCATTER_REQ;
+    h->version = DMA_PROTOCOL_VERSION;
+    h->session_id = ctx->session_id;
+
+    PDMA_SCATTER_HDR s = (PDMA_SCATTER_HDR)(ctx->send_buf + sizeof(DMA_MSG_HDR));
+    s->count = 1;
+    s->cb_total = 0x1000;
+
+    PDMA_SCATTER_ENTRY e = (PDMA_SCATTER_ENTRY)(
+        ctx->send_buf + sizeof(DMA_MSG_HDR) + sizeof(DMA_SCATTER_HDR));
+    e->qw_addr = pa;
+    e->cb = 0x1000;
+    e->f = 0;
+
+    DWORD cb_recv = 0;
+    if (!_DmaRoundTrip(ctx, ctx->send_buf, req_sz, ctx->recv_buf, ctx->recv_buf_size, &cb_recv))
+        return FALSE;
+
+    PDMA_SCATTER_ENTRY re = (PDMA_SCATTER_ENTRY)(
+        ctx->recv_buf + sizeof(DMA_MSG_HDR) + sizeof(DMA_SCATTER_HDR));
+    if (!re->f) return FALSE;
+
+    BYTE* data = ctx->recv_buf + sizeof(DMA_MSG_HDR) + sizeof(DMA_SCATTER_HDR)
+        + sizeof(DMA_SCATTER_ENTRY);
+    memcpy(out_page, data, 0x1000);
+    return TRUE;
 }
 
 // ============================================================================
@@ -1420,21 +1569,21 @@ BOOL DeviceFPGA_Open(_Inout_ PLC_CONTEXT ctxLC, _Out_opt_ PPLC_CONFIG_ERRORINFO 
     {
         DWORD test_addrs[] = { 0x1000, 0x10000, 0x100000, 0x1AD000 };
         DWORD ntest = sizeof(test_addrs) / sizeof(test_addrs[0]);
-        
+
         DWORD req_size = sizeof(DMA_MSG_HDR) + sizeof(DMA_SCATTER_HDR)
-                       + ntest * sizeof(DMA_SCATTER_ENTRY);
-        
+            + ntest * sizeof(DMA_SCATTER_ENTRY);
+
         PDMA_MSG_HDR req_hdr = (PDMA_MSG_HDR)ctx->send_buf;
         req_hdr->magic = DMA_PROTOCOL_MAGIC;
         req_hdr->cb_msg = req_size;
         req_hdr->type = DMA_MSG_READ_SCATTER_REQ;
         req_hdr->version = DMA_PROTOCOL_VERSION;
         req_hdr->session_id = ctx->session_id;
-        
+
         PDMA_SCATTER_HDR sh = (PDMA_SCATTER_HDR)(ctx->send_buf + sizeof(DMA_MSG_HDR));
         sh->count = ntest;
         sh->cb_total = ntest * 0x1000;
-        
+
         PDMA_SCATTER_ENTRY entries = (PDMA_SCATTER_ENTRY)(
             ctx->send_buf + sizeof(DMA_MSG_HDR) + sizeof(DMA_SCATTER_HDR));
         for (DWORD i = 0; i < ntest; i++) {
@@ -1442,36 +1591,215 @@ BOOL DeviceFPGA_Open(_Inout_ PLC_CONTEXT ctxLC, _Out_opt_ PPLC_CONFIG_ERRORINFO 
             entries[i].cb = 0x1000;
             entries[i].f = 0;
         }
-        
+
         DWORD cb_recv = 0;
         if (_DmaRoundTrip(ctx, ctx->send_buf, req_size, ctx->recv_buf, ctx->recv_buf_size, &cb_recv)) {
             printf("[DIAG] Post-Open read OK (cb_recv=%d)\n", cb_recv);
-            
+
             // 응답 파싱: 각 PA의 첫 16바이트
             PDMA_SCATTER_HDR rsh = (PDMA_SCATTER_HDR)(ctx->recv_buf + sizeof(DMA_MSG_HDR));
             PDMA_SCATTER_ENTRY re = (PDMA_SCATTER_ENTRY)(
                 ctx->recv_buf + sizeof(DMA_MSG_HDR) + sizeof(DMA_SCATTER_HDR));
             BYTE* data = ctx->recv_buf + sizeof(DMA_MSG_HDR) + sizeof(DMA_SCATTER_HDR)
-                       + ntest * sizeof(DMA_SCATTER_ENTRY);
-            
+                + ntest * sizeof(DMA_SCATTER_ENTRY);
+
             DWORD off = 0;
             for (DWORD i = 0; i < rsh->count && i < ntest; i++) {
                 if (re[i].f) {
                     printf("[DIAG] PA=%08X: %02X %02X %02X %02X %02X %02X %02X %02X "
-                           "%02X %02X %02X %02X %02X %02X %02X %02X\n",
-                           test_addrs[i],
-                           data[off+0],  data[off+1],  data[off+2],  data[off+3],
-                           data[off+4],  data[off+5],  data[off+6],  data[off+7],
-                           data[off+8],  data[off+9],  data[off+10], data[off+11],
-                           data[off+12], data[off+13], data[off+14], data[off+15]);
+                        "%02X %02X %02X %02X %02X %02X %02X %02X\n",
+                        test_addrs[i],
+                        data[off + 0], data[off + 1], data[off + 2], data[off + 3],
+                        data[off + 4], data[off + 5], data[off + 6], data[off + 7],
+                        data[off + 8], data[off + 9], data[off + 10], data[off + 11],
+                        data[off + 12], data[off + 13], data[off + 14], data[off + 15]);
                     off += re[i].cb;
-                } else {
+                }
+                else {
                     printf("[DIAG] PA=%08X: FAIL (unmapped)\n", test_addrs[i]);
                 }
             }
-        } else {
+        }
+        else {
             printf("[DIAG] Post-Open read FAILED!\n");
         }
+        fflush(stdout);
+    }
+
+    // ============================================================================
+    // [진단] Page Table Walk - EPROCESS VA→PA 변환 추적
+    // ============================================================================
+    // NTOS=PML4[496] 성공, EPROCESS=PML4[351] 실패 확인됨
+    // 4레벨 페이지테이블 walk을 수동으로 수행하여 실패 지점 특정
+    //
+    // Walk 경로: PML4 → PDPT → PD → PT → 최종 PA
+    // DTB(CR3) = 0x1AD000 (MemProcFS 로그에서 확인)
+    // EPROCESS VA = 0xFFFFAF8816F31080 → PML4[351], PDPT[16], PD[183], PT[305]
+    // NTOS VA = 0xFFFFF80575200000 → PML4[496] (비교용)
+    // ============================================================================
+    {
+        printf("\n[PT-WALK] === Page Table Walk Diagnostic ===\n");
+
+        BYTE page_buf[0x1000];
+        QWORD dtb_pa = 0x1AD000;  /* MemProcFS 로그에서 확인된 DTB */
+        DWORD t, i;
+        QWORD pml4e, pdpte, pde, pte;
+        QWORD pdpt_pa, pd_pa, pt_pa, final_pa;
+
+        /* VA에서 페이지테이블 인덱스 계산 매크로 */
+#define PML4_IDX(va) ((DWORD)(((va) >> 39) & 0x1FF))
+#define PDPT_IDX(va) ((DWORD)(((va) >> 30) & 0x1FF))
+#define PD_IDX(va)   ((DWORD)(((va) >> 21) & 0x1FF))
+#define PT_IDX(va)   ((DWORD)(((va) >> 12) & 0x1FF))
+
+/* [주의] 이 VA는 부팅마다 달라질 수 있음!
+   memprocfs -v -vv -vvv 로그에서 확인 후 업데이트 */
+        QWORD target_vas[2] = { 0xFFFFAF8816F31080ULL, 0xFFFFF80575200000ULL };
+        const char* target_names[2] = { "EPROCESS", "NTOS" };
+
+        /* Step 1: PML4 페이지 읽기 */
+        printf("[PT-WALK] Reading PML4 at PA=0x%llX...\n", dtb_pa);
+        if (!_DiagReadPage(ctx, dtb_pa, page_buf)) {
+            printf("[PT-WALK] FATAL: Cannot read PML4 page!\n");
+        }
+        else {
+            QWORD* pml4 = (QWORD*)page_buf;
+            DWORD k_valid = 0, k_zero = 0, k_bad = 0;
+
+            /* 커널 영역 PML4 엔트리 통계 (256-511) */
+            for (i = 256; i < 512; i++) {
+                QWORD pa_field;
+                if (pml4[i] == 0) { k_zero++; continue; }
+                pa_field = pml4[i] & 0x0000FFFFFFFFF000ULL;
+                if ((pml4[i] & 1) && pa_field < ctx->pa_max) k_valid++;
+                else if (pml4[i] & 1) k_bad++;
+            }
+            printf("[PT-WALK] PML4 kernel stats: valid=%d zero=%d bad_pa=%d\n", k_valid, k_zero, k_bad);
+
+            /* Self-referential entry 확인 */
+            for (i = 256; i < 512; i++) {
+                if ((pml4[i] & 0x0000FFFFFFFFF083ULL) == (dtb_pa | 0x03))
+                    printf("[PT-WALK] PML4 self-ref at [%d] = 0x%016llX\n", i, pml4[i]);
+            }
+
+            /* 각 타겟 VA에 대해 4레벨 walk 수행 */
+            for (t = 0; t < 2; t++) {
+                QWORD va = target_vas[t];
+                DWORD idx_pml4 = PML4_IDX(va);
+                DWORD idx_pdpt = PDPT_IDX(va);
+                DWORD idx_pd = PD_IDX(va);
+                DWORD idx_pt = PT_IDX(va);
+
+                printf("\n[PT-WALK] --- %s VA=0x%llX ---\n", target_names[t], va);
+                printf("[PT-WALK] Indices: PML4[%d] PDPT[%d] PD[%d] PT[%d]\n",
+                    idx_pml4, idx_pdpt, idx_pd, idx_pt);
+
+                /* Level 1: PML4 */
+                pml4e = pml4[idx_pml4];
+                printf("[PT-WALK] L1 PML4[%d] = 0x%016llX", idx_pml4, pml4e);
+                if (!(pml4e & 1)) { printf(" -> NOT PRESENT!\n"); continue; }
+                pdpt_pa = pml4e & 0x0000FFFFFFFFF000ULL;
+                printf(" -> RW=%d US=%d NX=%d PDPT_PA=0x%llX",
+                    (int)((pml4e >> 1) & 1), (int)((pml4e >> 2) & 1),
+                    (int)((pml4e >> 63) & 1), pdpt_pa);
+                if (pdpt_pa >= ctx->pa_max) { printf(" EXCEEDS paMax!\n"); continue; }
+                printf("\n");
+
+                /* Level 2: PDPT */
+                printf("[PT-WALK] L2 Reading PDPT at PA=0x%llX...\n", pdpt_pa);
+                if (!_DiagReadPage(ctx, pdpt_pa, page_buf)) {
+                    printf("[PT-WALK] L2 FAIL: Cannot read PDPT!\n"); continue;
+                }
+                pdpte = ((QWORD*)page_buf)[idx_pdpt];
+                printf("[PT-WALK] L2 PDPT[%d] = 0x%016llX", idx_pdpt, pdpte);
+                if (!(pdpte & 1)) { printf(" -> NOT PRESENT!\n"); continue; }
+                if (pdpte & 0x80) {
+                    final_pa = (pdpte & 0x0000FFFFC0000000ULL) | (va & 0x3FFFFFFFULL);
+                    printf(" -> 1GB LARGE PAGE! PA=0x%llX\n", final_pa); continue;
+                }
+                pd_pa = pdpte & 0x0000FFFFFFFFF000ULL;
+                printf(" -> PD_PA=0x%llX", pd_pa);
+                if (pd_pa >= ctx->pa_max) { printf(" EXCEEDS paMax!\n"); continue; }
+                printf("\n");
+
+                /* Level 3: PD */
+                printf("[PT-WALK] L3 Reading PD at PA=0x%llX...\n", pd_pa);
+                if (!_DiagReadPage(ctx, pd_pa, page_buf)) {
+                    printf("[PT-WALK] L3 FAIL: Cannot read PD!\n"); continue;
+                }
+                pde = ((QWORD*)page_buf)[idx_pd];
+                printf("[PT-WALK] L3 PD[%d] = 0x%016llX", idx_pd, pde);
+                if (!(pde & 1)) { printf(" -> NOT PRESENT!\n"); continue; }
+                if (pde & 0x80) {
+                    final_pa = (pde & 0x0000FFFFFFE00000ULL) | (va & 0x1FFFFFULL);
+                    printf(" -> 2MB LARGE PAGE! PA=0x%llX\n", final_pa); continue;
+                }
+                pt_pa = pde & 0x0000FFFFFFFFF000ULL;
+                printf(" -> PT_PA=0x%llX", pt_pa);
+                if (pt_pa >= ctx->pa_max) { printf(" EXCEEDS paMax!\n"); continue; }
+                printf("\n");
+
+                /* Level 4: PT */
+                printf("[PT-WALK] L4 Reading PT at PA=0x%llX...\n", pt_pa);
+                if (!_DiagReadPage(ctx, pt_pa, page_buf)) {
+                    printf("[PT-WALK] L4 FAIL: Cannot read PT!\n"); continue;
+                }
+                pte = ((QWORD*)page_buf)[idx_pt];
+                printf("[PT-WALK] L4 PT[%d] = 0x%016llX", idx_pt, pte);
+                if (!(pte & 1)) { printf(" -> NOT PRESENT!\n"); continue; }
+                final_pa = (pte & 0x0000FFFFFFFFF000ULL) | (va & 0xFFFULL);
+                printf(" -> FINAL PA=0x%llX\n", final_pa);
+
+                /* 최종 PA 읽기 시도 */
+                printf("[PT-WALK] Reading final PA=0x%llX...\n", final_pa);
+                if (!_DiagReadPage(ctx, final_pa, page_buf)) {
+                    printf("[PT-WALK] FAIL: Cannot read final page!\n");
+                }
+                else {
+                    DWORD page_off = (DWORD)(va & 0xFFF);
+                    printf("[PT-WALK] SUCCESS! Data at offset 0x%X:\n", page_off);
+                    printf("[PT-WALK]   %02X %02X %02X %02X %02X %02X %02X %02X "
+                        "%02X %02X %02X %02X %02X %02X %02X %02X\n",
+                        page_buf[page_off + 0], page_buf[page_off + 1],
+                        page_buf[page_off + 2], page_buf[page_off + 3],
+                        page_buf[page_off + 4], page_buf[page_off + 5],
+                        page_buf[page_off + 6], page_buf[page_off + 7],
+                        page_buf[page_off + 8], page_buf[page_off + 9],
+                        page_buf[page_off + 10], page_buf[page_off + 11],
+                        page_buf[page_off + 12], page_buf[page_off + 13],
+                        page_buf[page_off + 14], page_buf[page_off + 15]);
+                }
+            }
+
+            /* HV Heap 범위와 페이지테이블 PA 충돌 체크 */
+            printf("\n[PT-WALK] HV Heap PA range: 0x746CB000 - 0x74AE4000\n");
+
+            /* 일반 커널 PML4 스캔: 모든 valid 엔트리의 PDPT 읽기 시도 */
+            printf("[PT-WALK] === Kernel PML4 PDPT Readability Scan ===\n");
+            {
+                DWORD pdpt_ok = 0, pdpt_fail = 0;
+                for (i = 256; i < 512; i++) {
+                    BYTE tmp[0x1000];
+                    QWORD scan_pa;
+                    if (!(pml4[i] & 1)) continue;
+                    scan_pa = pml4[i] & 0x0000FFFFFFFFF000ULL;
+                    if (scan_pa >= ctx->pa_max) {
+                        printf("[PT-WALK] PML4[%d] PA=0x%llX EXCEEDS paMax!\n", i, scan_pa);
+                        continue;
+                    }
+                    if (_DiagReadPage(ctx, scan_pa, tmp)) {
+                        pdpt_ok++;
+                    }
+                    else {
+                        pdpt_fail++;
+                        printf("[PT-WALK] PML4[%d] PDPT_PA=0x%llX -> READ FAIL!\n", i, scan_pa);
+                    }
+                }
+                printf("[PT-WALK] PDPT scan: %d readable, %d FAILED\n", pdpt_ok, pdpt_fail);
+            }
+        }
+
+        printf("[PT-WALK] === End ===\n\n");
         fflush(stdout);
     }
 

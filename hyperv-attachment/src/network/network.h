@@ -1,4 +1,4 @@
-#pragma once
+ï»¿#pragma once
 #include <cstdint>
 
 // ============================================================================
@@ -50,54 +50,64 @@ namespace network
     inline std::uint64_t packets_received = 0;
     inline std::uint64_t packets_sent = 0;
     inline std::uint64_t packets_dropped = 0;
-    // [ÇÙ½É] 0xF8: cache miss Ä«¿îÅÍ - DD=1 ½ÃÁ¡¿¡ cache[idx]==0ÀÌ¸é ÆĞÅ¶ ½ºÅµ
+    // [ï¿½Ù½ï¿½] 0xF8: cache miss Ä«ï¿½ï¿½ï¿½ï¿½ - DD=1 ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ cache[idx]==0ï¿½Ì¸ï¿½ ï¿½ï¿½Å¶ ï¿½ï¿½Åµ
     inline volatile std::uint32_t dbg_cache_miss = 0;
     inline volatile std::uint32_t dbg_cache_hit = 0;
-    inline volatile std::uint32_t dbg_precache_update = 0; // 0xFA: proactive cache ¼º°ø È½¼ö
-    // 0xFB: È¸Àü ½ºÄ³³Ê Áø´Ü
-    inline volatile std::uint32_t dbg_scan_total = 0;   // ÃÑ ½ºÄµÇÑ descriptor ¼ö
-    inline volatile std::uint32_t dbg_scan_dd0 = 0;     // DD=0 ¹ß°ß (READ format)
-    inline volatile std::uint32_t dbg_scan_dd1 = 0;     // DD=1 ¹ß°ß (WB format)
-    inline volatile std::uint32_t dbg_scan_addr_zero = 0; // DD=0ÀÌÁö¸¸ addr=0
-    inline volatile std::uint64_t dbg_scan_first_addr = 0; // Ã¹ DD=0 descriptorÀÇ pkt_addr
-    inline volatile std::uint64_t dbg_scan_first_hdr = 0;  // Ã¹ DD=0 descriptorÀÇ hdr_addr (staterr À§Ä¡)
+    inline volatile std::uint32_t dbg_precache_update = 0; // 0xFA: proactive cache ï¿½ï¿½ï¿½ï¿½ È½ï¿½ï¿½
+    // 0xFB: È¸ï¿½ï¿½ ï¿½ï¿½Ä³ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
+    inline volatile std::uint32_t dbg_scan_total = 0;   // ï¿½ï¿½ ï¿½ï¿½Äµï¿½ï¿½ descriptor ï¿½ï¿½
+    inline volatile std::uint32_t dbg_scan_dd0 = 0;     // DD=0 ï¿½ß°ï¿½ (READ format)
+    inline volatile std::uint32_t dbg_scan_dd1 = 0;     // DD=1 ï¿½ß°ï¿½ (WB format)
+    inline volatile std::uint32_t dbg_scan_addr_zero = 0; // DD=0ì¼ë•Œ addr=0
+    inline volatile std::uint32_t dbg_ecam_status = 0;   // ECAMì—ì„œ ì½ì€ PCI Status
+    inline volatile std::uint32_t dbg_ecam_capptr = 0;   // ECAMì—ì„œ ì½ì€ cap pointer
+    inline volatile std::uint64_t dbg_scan_first_addr = 0; // Ã¹ DD=0 descriptorï¿½ï¿½ pkt_addr
+    inline volatile std::uint64_t dbg_scan_first_hdr = 0;  // Ã¹ DD=0 descriptorï¿½ï¿½ hdr_addr (staterr ï¿½ï¿½Ä¡)
 
-    // [ÇÙ½É] µğ¹ö±× Áø´Ü º¯¼ö - CPUID probe·Î ³ëÃâ
-    inline std::uint32_t dbg_rx_call_count = 0;      // process_rx_packet È£Ãâ È½¼ö
-    inline std::uint32_t dbg_rx_udp_count = 0;       // UDP ÆÄ½Ì ¼º°ø È½¼ö
-    inline std::uint32_t dbg_rx_port_match = 0;      // dst_port==28473 ¸ÅÄª È½¼ö
-    inline std::uint32_t dbg_rx_dma_call = 0;        // process_complete_dma_payload È£Ãâ È½¼ö
-    inline std::uint16_t dbg_last_dst_port = 0;      // ¸¶Áö¸· ¼ö½Å UDP dst_port
-    inline std::uint32_t dbg_last_payload_magic = 0;  // ¸¶Áö¸· UDP payload Ã¹ 4¹ÙÀÌÆ®
-    inline std::uint16_t dbg_last_pkt_len = 0;       // ¸¶Áö¸· ¼ö½Å ÆĞÅ¶ ±æÀÌ
-    inline std::uint32_t dbg_igc_dd_count = 0;       // DD=1 °¨Áö È½¼ö
-    inline std::uint16_t dbg_attack_src_port = 0;      // [ÇÙ½É] °ø°İ PC ephemeral src_port (host order)
-    inline std::uint32_t dbg_active_rx_queues = 0;     // [ÇÙ½É] È°¼º RX Å¥ °³¼ö (igc: ÃÖ´ë 4)
+    // [ï¿½Ù½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ - CPUID probeï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
+    inline std::uint32_t dbg_rx_call_count = 0;      // process_rx_packet È£ï¿½ï¿½ È½ï¿½ï¿½
+    inline std::uint32_t dbg_rx_udp_count = 0;       // UDP ï¿½Ä½ï¿½ ï¿½ï¿½ï¿½ï¿½ È½ï¿½ï¿½
+    inline std::uint32_t dbg_rx_port_match = 0;      // dst_port==28473 ï¿½ï¿½Äª È½ï¿½ï¿½
+    inline std::uint32_t dbg_rx_dma_call = 0;        // process_complete_dma_payload È£ï¿½ï¿½ È½ï¿½ï¿½
+    inline std::uint16_t dbg_last_dst_port = 0;      // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ UDP dst_port
+    inline std::uint32_t dbg_last_payload_magic = 0;  // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ UDP payload Ã¹ 4ï¿½ï¿½ï¿½ï¿½Æ®
+    inline std::uint16_t dbg_last_pkt_len = 0;       // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½Å¶ ï¿½ï¿½ï¿½ï¿½
+    inline std::uint32_t dbg_igc_dd_count = 0;       // DD=1 ï¿½ï¿½ï¿½ï¿½ È½ï¿½ï¿½
+    inline std::uint16_t dbg_attack_src_port = 0;      // [ï¿½Ù½ï¿½] ï¿½ï¿½ï¿½ï¿½ PC ephemeral src_port (host order)
+    inline std::uint32_t dbg_active_rx_queues = 0;     // [ï¿½Ù½ï¿½] È°ï¿½ï¿½ RX Å¥ ï¿½ï¿½ï¿½ï¿½ (igc: ï¿½Ö´ï¿½ 4)
 
-    // [ÇÙ½É] TX Q1 µğ¹ö±× Ä«¿îÅÍ
-    inline std::uint32_t dbg_txq1_dd_ok = 0;          // DD Á¤»ó ¼¼ÆÃ È½¼ö
-    inline std::uint32_t dbg_txq1_dd_timeout = 0;     // DD Å¸ÀÓ¾Æ¿ô È½¼ö
-    inline std::uint32_t dbg_txq1_last_tdh = 0;       // ¸¶Áö¸· TX ÈÄ TDH °ª
-    inline std::uint32_t dbg_txq1_last_cmd = 0;       // ¸¶Áö¸· TX cmd_type_len (DEXT È®ÀÎ¿ë)
-    inline std::uint32_t dbg_txq1_last_olinfo = 0;    // ¸¶Áö¸· TX olinfo_status (PAYLEN È®ÀÎ¿ë)
-    inline std::uint32_t dbg_txq1_q0_fallback = 0;    // Q0 fallback »ç¿ë È½¼ö
+    // [ï¿½Ù½ï¿½] TX Q1 ï¿½ï¿½ï¿½ï¿½ï¿½ Ä«ï¿½ï¿½ï¿½ï¿½
+    inline std::uint32_t dbg_txq1_dd_ok = 0;          // DD ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ È½ï¿½ï¿½
+    inline std::uint32_t dbg_txq1_dd_timeout = 0;     // DD Å¸ï¿½Ó¾Æ¿ï¿½ È½ï¿½ï¿½
+    inline std::uint32_t dbg_txq1_last_tdh = 0;       // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ TX ï¿½ï¿½ TDH ï¿½ï¿½
+    inline std::uint32_t dbg_txq1_last_cmd = 0;       // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ TX cmd_type_len (DEXT È®ï¿½Î¿ï¿½)
+    inline std::uint32_t dbg_txq1_last_olinfo = 0;    // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ TX olinfo_status (PAYLEN È®ï¿½Î¿ï¿½)
+    inline std::uint32_t dbg_txq1_q0_fallback = 0;    // Q0 fallback ï¿½ï¿½ï¿½ È½ï¿½ï¿½
+    inline volatile std::uint32_t dbg_txq1_re_enable = 0;    // [TX stall fix] Q1 auto re-enable count (TXDCTL.ENABLE lost)
+    inline volatile std::uint32_t dbg_txq1_consec_max = 0;  // [TX stall fix] max consecutive DD timeout seen
+    inline volatile std::uint32_t dbg_nic_wake_count = 0;    // [NIC wake] SLU/LU ë³µêµ¬ íšŸìˆ˜
+    inline volatile std::uint32_t dbg_last_recovery_ctrl = 0;   // ë§ˆì§€ë§‰ recovery ì‹œ CTRL ê°’
+    inline volatile std::uint32_t dbg_last_recovery_status = 0; // ë§ˆì§€ë§‰ recovery ì‹œ STATUS ê°’
+    inline volatile std::uint32_t dbg_last_recovery_tdbal = 0;  // ë§ˆì§€ë§‰ recovery ì‹œ TDBAL ê°’
+    inline volatile std::uint32_t dbg_last_recovery_txdctl = 0; // ë§ˆì§€ë§‰ recovery ì‹œ TXDCTL ê°’
+    inline volatile std::uint32_t dbg_poll_entered = 0;      // [STALL DIAG] process_pending() ì‹¤ì œ RX pollê¹Œì§€ ë„ë‹¬ íšŸìˆ˜
 
-    // [ÇÙ½É] DMA¡æTX °æ·Î Áø´Ü Ä«¿îÅÍ
-    inline std::uint32_t dbg_dma_rsp_size = 0;         // ¸¶Áö¸· dma::process ¸®ÅÏ°ª
-    inline std::uint32_t dbg_dma_rsp_nonzero = 0;      // rsp_size > 0 È½¼ö
-    inline std::uint32_t dbg_send_response_enter = 0;   // send_response ÁøÀÔ È½¼ö
-    inline std::uint32_t dbg_send_response_fail = 0;    // send_response ½ÇÆĞ »çÀ¯ (bitfield)
+    // [ï¿½Ù½ï¿½] DMAï¿½ï¿½TX ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ Ä«ï¿½ï¿½ï¿½ï¿½
+    inline std::uint32_t dbg_dma_rsp_size = 0;         // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ dma::process ï¿½ï¿½ï¿½Ï°ï¿½
+    inline std::uint32_t dbg_dma_rsp_nonzero = 0;      // rsp_size > 0 È½ï¿½ï¿½
+    inline std::uint32_t dbg_send_response_enter = 0;   // send_response ï¿½ï¿½ï¿½ï¿½ È½ï¿½ï¿½
+    inline std::uint32_t dbg_send_response_fail = 0;    // send_response ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ (bitfield)
 
-    // [ÇÙ½É] dma::process ³»ºÎ ½ÇÆĞ »çÀ¯ ÃßÀû
+    // [ï¿½Ù½ï¿½] dma::process ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
     // 1=size<hdr, 2=magic, 3=version, 4=cb_msg>size, 5=unknown_type
     inline std::uint32_t dbg_dma_fail_reason = 0;
-    inline std::uint32_t dbg_dma_last_version = 0;      // ¹ŞÀº version °ª
-    inline std::uint32_t dbg_dma_last_type = 0;          // ¹ŞÀº type °ª
-    inline std::uint32_t dbg_dma_last_cbmsg = 0;         // ¹ŞÀº cb_msg °ª
-    inline std::uint32_t dbg_dma_payload_size = 0;       // ip_frag¿¡¼­ ³Ñ¾î¿Â dma_size
+    inline std::uint32_t dbg_dma_last_version = 0;      // ï¿½ï¿½ï¿½ï¿½ version ï¿½ï¿½
+    inline std::uint32_t dbg_dma_last_type = 0;          // ï¿½ï¿½ï¿½ï¿½ type ï¿½ï¿½
+    inline std::uint32_t dbg_dma_last_cbmsg = 0;         // ï¿½ï¿½ï¿½ï¿½ cb_msg ï¿½ï¿½
+    inline std::uint32_t dbg_dma_payload_size = 0;       // ip_fragï¿½ï¿½ï¿½ï¿½ ï¿½Ñ¾ï¿½ï¿½ dma_size
 
-    // [ÇÙ½É] raw ÆĞÅ¶ ´ıÇÁ: volatile scalar (ÄÄÆÄÀÏ·¯ ÃÖÀûÈ­ ¹æÁö)
-    // ¹è¿­ ¹æ½ÄÀº dead store eliminationÀ¸·Î Á¦°ÅµÉ ¼ö ÀÖÀ½
+    // [ï¿½Ù½ï¿½] raw ï¿½ï¿½Å¶ ï¿½ï¿½ï¿½ï¿½: volatile scalar (ï¿½ï¿½ï¿½ï¿½ï¿½Ï·ï¿½ ï¿½ï¿½ï¿½ï¿½È­ ï¿½ï¿½ï¿½ï¿½)
+    // ï¿½è¿­ ï¿½ï¿½ï¿½ï¿½ï¿½ dead store eliminationï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½Åµï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
     inline volatile std::uint32_t dbg_pkt_eth0 = 0;       // pkt_data[0..3] ETH dst mac
     inline volatile std::uint32_t dbg_pkt_ip0 = 0;        // pkt_data[14..17] IP ver+tos+totlen
     inline volatile std::uint32_t dbg_pkt_ip4 = 0;        // pkt_data[18..21] IP id+flags+frag
@@ -107,22 +117,22 @@ namespace network
     inline volatile std::uint32_t dbg_pkt_dma8 = 0;       // DMA payload[8..11] = type+version
     inline volatile std::uint32_t dbg_pkt_dma12 = 0;      // DMA payload[12..15] = session_id
 
-    // [ÇÙ½É] IP ÆÄ½Ì Áß°£°ª Ä¸Ã³ (ip_frag¿¡¼­ »ç¿ëµÇ´Â ½ÇÁ¦ °ª)
+    // [ï¿½Ù½ï¿½] IP ï¿½Ä½ï¿½ ï¿½ß°ï¿½ï¿½ï¿½ Ä¸Ã³ (ip_fragï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½Ç´ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½)
     inline volatile std::uint32_t dbg_ip_total = 0;        // ntohs(ip->total_length)
     inline volatile std::uint32_t dbg_ip_ihl = 0;          // (ver_ihl & 0x0F) * 4
-    inline volatile std::uint32_t dbg_udp_payload_ptr_off = 0; // udp_payload - pkt_data ¿ÀÇÁ¼Â
+    inline volatile std::uint32_t dbg_udp_payload_ptr_off = 0; // udp_payload - pkt_data ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 
-    // [ÇÙ½É] 0xF3 byte-level + 0xF4 buf_addr/raw ºñ±³
-    inline volatile std::uint32_t dbg_udp_len = 0;        // ntohs(udp->length) - ÆĞµù vs ½ÇÁ¦Å©±â ÆÇº°
-    inline volatile std::uint32_t dbg_udp_chksum = 0;     // UDP checksum (0ÀÌ¸é no checksum)
-    inline volatile std::uint32_t dbg_payload_b0 = 0;     // udp_payload[0] °³º°¹ÙÀÌÆ®
-    inline volatile std::uint32_t dbg_payload_b4 = 0;     // udp_payload[4] °³º°¹ÙÀÌÆ® (cb_msg Ã¹¹ÙÀÌÆ®)
+    // [ï¿½Ù½ï¿½] 0xF3 byte-level + 0xF4 buf_addr/raw ï¿½ï¿½
+    inline volatile std::uint32_t dbg_udp_len = 0;        // ntohs(udp->length) - ï¿½Ğµï¿½ vs ï¿½ï¿½ï¿½ï¿½Å©ï¿½ï¿½ ï¿½Çºï¿½
+    inline volatile std::uint32_t dbg_udp_chksum = 0;     // UDP checksum (0ï¿½Ì¸ï¿½ no checksum)
+    inline volatile std::uint32_t dbg_payload_b0 = 0;     // udp_payload[0] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ®
+    inline volatile std::uint32_t dbg_payload_b4 = 0;     // udp_payload[4] ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Æ® (cb_msg Ã¹ï¿½ï¿½ï¿½ï¿½Æ®)
     inline volatile std::uint32_t dbg_payload_b5 = 0;     // udp_payload[5]
-    inline volatile std::uint32_t dbg_payload_b8 = 0;     // udp_payload[8] (type Ã¹¹ÙÀÌÆ®)
-    inline volatile std::uint32_t dbg_payload_b10 = 0;    // udp_payload[10] (version Ã¹¹ÙÀÌÆ®)
-    inline volatile std::uint32_t dbg_pkt_len = 0;        // descriptor°¡ ¸®Æ÷Æ®ÇÑ ÆĞÅ¶ ±æÀÌ
+    inline volatile std::uint32_t dbg_payload_b8 = 0;     // udp_payload[8] (type Ã¹ï¿½ï¿½ï¿½ï¿½Æ®)
+    inline volatile std::uint32_t dbg_payload_b10 = 0;    // udp_payload[10] (version Ã¹ï¿½ï¿½ï¿½ï¿½Æ®)
+    inline volatile std::uint32_t dbg_pkt_len = 0;        // descriptorï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½Æ®ï¿½ï¿½ ï¿½ï¿½Å¶ ï¿½ï¿½ï¿½ï¿½
 
-    // [ÇÙ½É] 0xF4~0xF6 buf_addr + raw/copy ºñ±³ Áø´Ü
+    // [ï¿½Ù½ï¿½] 0xF4~0xF6 buf_addr + raw/copy ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
     inline volatile std::uint64_t dbg_buf_addr = 0;
     inline volatile std::uint32_t dbg_desc_idx = 0;
     inline volatile std::uint32_t dbg_wb_staterr = 0;
@@ -133,34 +143,48 @@ namespace network
     inline volatile std::uint32_t dbg_raw_byte17 = 0;
     inline volatile std::uint32_t dbg_copy_byte17 = 0;
 
-    // [ÇÙ½É] 0xF7: guest buffer ÀüÃ¼ hex dump (DMA port ÆĞÅ¶¸¸)
-    // ¿øº» guest buffer¿¡¼­ ÀĞÀº Ã¹ 64¹ÙÀÌÆ®¸¦ 16°³ DWORD·Î ÀúÀå
-    // ÀÌ°ÍÀ» Wireshark hex¿Í 1:1 ºñ±³ÇØ¼­ Á¤È®ÇÑ Â÷ÀÌÁ¡ È®ÀÎ
-    inline volatile std::uint32_t dbg_hex[16] = {};  // 64¹ÙÀÌÆ® = 16 * 4¹ÙÀÌÆ®
+    // [ï¿½Ù½ï¿½] 0xF7: guest buffer ï¿½ï¿½Ã¼ hex dump (DMA port ï¿½ï¿½Å¶ï¿½ï¿½)
+    // ï¿½ï¿½ï¿½ï¿½ guest bufferï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ Ã¹ 64ï¿½ï¿½ï¿½ï¿½Æ®ï¿½ï¿½ 16ï¿½ï¿½ DWORDï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
+    // ï¿½Ì°ï¿½ï¿½ï¿½ Wireshark hexï¿½ï¿½ 1:1 ï¿½ï¿½ï¿½Ø¼ï¿½ ï¿½ï¿½È®ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ È®ï¿½ï¿½
+    inline volatile std::uint32_t dbg_hex[16] = {};  // 64ï¿½ï¿½ï¿½ï¿½Æ® = 16 * 4ï¿½ï¿½ï¿½ï¿½Æ®
+    // [ì§„ë‹¨] TX í”„ë ˆì„ ìŠ¤ëƒ…ìƒ· (flush_deferred_txì—ì„œ inject ì§ì „ ìº¡ì²˜)
+    inline volatile std::uint32_t dbg_tx_snap[16] = {};  // ì²« TX í”„ë ˆì„ 64ë°”ì´íŠ¸
+    inline volatile std::uint32_t dbg_tx_snap_ports = 0; // our_src_port<<16 | attack_src_port
 
-    // [ÇÙ½É 0xFB] TX Áø´ÜÀº nic::igc_hv_tx struct ¸â¹ö·Î ÀÌµ¿
-    // (inline ½ºÄ®¶ó/¹è¿­ ¸ğµÎ freestanding ¸µÄ¿¿¡¼­ TU°£ °øÀ¯ ¾È µÊ)
+    // [ï¿½Ù½ï¿½ 0xFB] TX ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ nic::igc_hv_tx struct ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½Ìµï¿½
+    // (inline ï¿½ï¿½Ä®ï¿½ï¿½/ï¿½è¿­ ï¿½ï¿½ï¿½ freestanding ï¿½ï¿½Ä¿ï¿½ï¿½ï¿½ï¿½ TUï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ ï¿½ï¿½)
 
-    // [ÇÙ½É] Fragment Áø´Ü - ReadScatter 62KB ¡æ ~43 IP fragments ÇÊ¿ä
-    // OPEN(32B)=´ÜÀÏÆĞÅ¶ OK, ReadScatter=fragment ¾È µµÂø ¡æ ÃßÀû ÇÊ¿ä
-    inline volatile std::uint32_t dbg_frag_last_count = 0;    // fragment_and_send ¸®ÅÏ°ª (¿¹»ó: ~43)
-    inline volatile std::uint32_t dbg_frag_last_rspsize = 0;  // ¸¶Áö¸· DMA rsp Å©±â (62488 µî)
-    inline volatile std::uint32_t dbg_inject_total = 0;        // inject ÇÔ¼ö ÃÑ È£Ãâ È½¼ö
-    inline volatile std::uint32_t dbg_inject_success = 0;      // inject ¸®ÅÏ 1 (DD OK) È½¼ö
-    inline volatile std::uint32_t dbg_inject_fail = 0;         // inject ¸®ÅÏ 0 (µå¶ø/Å¸ÀÓ¾Æ¿ô) È½¼ö
-    inline volatile std::uint32_t dbg_inject_last_len = 0;     // ¸¶Áö¸· inject frame_len
-    inline volatile std::uint32_t dbg_inject_first_len = 0;    // send_response È£Ãâ ÈÄ Ã¹ inject frame_len
-    inline volatile std::uint32_t dbg_inject_is_first = 0;     // ³»ºÎ ÇÃ·¡±×: Ã¹ fragment ÃßÀû¿ë
+    // [ï¿½Ù½ï¿½] Fragment ï¿½ï¿½ï¿½ï¿½ - ReadScatter 62KB ï¿½ï¿½ ~43 IP fragments ï¿½Ê¿ï¿½
+    // OPEN(32B)=ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Å¶ OK, ReadScatter=fragment ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½Ê¿ï¿½
+    inline volatile std::uint32_t dbg_frag_last_count = 0;    // fragment_and_send ï¿½ï¿½ï¿½Ï°ï¿½ (ï¿½ï¿½ï¿½ï¿½: ~43)
+    inline volatile std::uint32_t dbg_inject_total = 0;        // inject í•¨ìˆ˜ ì´ í˜¸ì¶œ íšŸìˆ˜
+    inline volatile std::uint32_t dbg_inject_success = 0;      // inject ë¦¬í„´ 1 (DD OK) íšŸìˆ˜
+    inline volatile std::uint32_t dbg_inject_fail = 0;         // inject ë¦¬í„´ 0 (ì‹¤íŒ¨/íƒ€ì„ì•„ì›ƒ) íšŸìˆ˜
+    inline volatile std::uint32_t dbg_inject_last_len = 0;     // ë§ˆì§€ë§‰ inject frame_len
 
-    // [ÇÙ½É] Ã¹ fragment ÇÁ·¹ÀÓ Çì´õ Ä¸Ã³ (OPEN=74B vs Fragment=1514B ºñ±³¿ë)
-    // inject¿¡¼­ is_first=1ÀÏ ¶§ ÇÁ·¹ÀÓ Ã¹ 48¹ÙÀÌÆ® ÀúÀå
-    // OPENÀÌ Á¤»ó µµÂøÇÏ°í Fragment°¡ ¾È µµÂøÇÏ¸é Çì´õ Â÷ÀÌ È®ÀÎ
-    inline volatile std::uint32_t dbg_first_hdr[12] = {};  // 48 bytes = ETH(14)+IP(20)+UDP(8)+DATA(6)
+    // [TIMING] worst-case ìš”ì²­ breakdown (TSC ë‹¨ìœ„)
+    // ê°€ì¥ ëŠë¦° ìš”ì²­ì˜ ê° ë‹¨ê³„ë³„ ì‹œê°„ ê¸°ë¡
+    inline volatile std::uint64_t dbg_timing_worst_total = 0;  // ì „ì²´ (parse+EPT+TX)
+    inline volatile std::uint64_t dbg_timing_worst_parse = 0;  // í—¤ë” íŒŒì‹±
+    inline volatile std::uint64_t dbg_timing_worst_ept = 0;    // dma::process (EPT walk)
+    inline volatile std::uint64_t dbg_timing_worst_tx = 0;     // send_response (TX inject)
+    inline volatile std::uint32_t dbg_timing_worst_rsp = 0;    // ì‘ë‹µ í¬ê¸° (bytes)
+    inline volatile std::uint32_t dbg_timing_call_count = 0;   // ì´ ì²˜ë¦¬ íšŸìˆ˜
 
-    // [ÇÙ½É 0xFB] NIC TX Åë°è ·¹Áö½ºÅÍ - wire Àü¼Û ½ÇÁ¦ ¿©ºÎ ÆÇº°
-    // GPTC: ¼º°øÀûÀ¸·Î Àü¼ÛµÈ ÆĞÅ¶ ¼ö (Good Packets Transmitted Count)
-    // TPT: ÃÑ Àü¼Û ÆĞÅ¶ ¼ö (¿¡·¯ Æ÷ÇÔ)
-    inline volatile std::uint32_t dbg_nic_gptc = 0;   // Good Packets TX Count (0x4080)
-    inline volatile std::uint32_t dbg_nic_tpt = 0;    // Total Packets TX (0x40D4)
-    inline volatile std::uint32_t dbg_nic_gotcl = 0;  // Good Octets TX (low, 0x4090)
+    // [TIMING] 4KB read ì „ìš© (rsp < 8KB) â€” latency spike ì¶”ì 
+    inline volatile std::uint64_t dbg_timing_small_worst = 0;
+    inline volatile std::uint64_t dbg_timing_small_parse = 0;
+    inline volatile std::uint64_t dbg_timing_small_ept = 0;
+    inline volatile std::uint64_t dbg_timing_small_tx = 0;
+    inline volatile std::uint32_t dbg_timing_small_rsp = 0;
+    inline volatile std::uint32_t dbg_timing_small_count = 0;
+
 }
+
+
+
+
+
+
+
+

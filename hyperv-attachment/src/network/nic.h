@@ -1,17 +1,16 @@
-#pragma once
+ï»¿#pragma once
 #include <cstdint>
+#include <intrin.h>       // __outdword, __indword (CF8/CFC port I/O)
 
 // ============================================================================
-// NIC Hardware Abstraction
+// NIC Hardware Abstraction â€” Intel I225-V / I226-V (igc) ì „ìš©
 // ============================================================================
-// Intel: e1000e (I219 µî) + igc (I225/I226)
-// Realtek: RTL8168/8111 (1GbE), RTL8125/8126 (2.5GbE)
+// [ë¦¬íŒ©í† ë§] RTL8125B ì½”ë“œ ì „ëŸ‰ ì‚­ì œ (IOMMU DMA ì°¨ë‹¨ í•´ê²° ë¶ˆê°€)
+// I225-V: MMIO BAR0, igc ë“œë¼ì´ë²„, TX Q1 ê²©ë¦¬ ì „ì†¡ ì‘ë™ í™•ì¸ë¨
 //
-// [ÇÙ½É] I225-V(igc)´Â e1000e¿Í ·¹Áö½ºÅÍ ¿ÀÇÁ¼ÂÀÌ ´Ù¸§!
+// [í•µì‹¬] I225-V(igc)ëŠ” e1000eì™€ ë ˆì§€ìŠ¤í„° ì˜¤í”„ì…‹ì´ ë‹¤ë¦„!
 //   e1000e: RDBAL=0x2800, RDH=0x2810, TDBAL=0x3800, TDH=0x3810
 //   igc:    RDBAL=0xC000, RDH=0xC010, TDBAL=0xE000, TDH=0xE010
-//   RDBAL/RDLENÀº ¹Ì·¯¸µµÇ¾î old offset¿¡¼­µµ ÀĞÈ÷Áö¸¸
-//   RDH/RDT/TDH/TDT´Â igc ¿ÀÇÁ¼Â¿¡¼­¸¸ ¾÷µ¥ÀÌÆ®µÊ
 // ============================================================================
 
 namespace nic
@@ -22,27 +21,61 @@ namespace nic
     enum class nic_type_t : std::uint8_t
     {
         UNKNOWN = 0,
-        INTEL = 1,
-        REALTEK = 2
+        INTEL = 1
     };
 
-    // [ÇÙ½É] Intel NIC ¼­ºêÅ¸ÀÔ - ·¹Áö½ºÅÍ ¿ÀÇÁ¼Â ¼±ÅÃ¿ë
     enum class intel_gen_t : std::uint8_t
     {
-        E1000E = 0,  // I219, I217, 82574L µî (legacy offset)
-        IGC = 1   // I225, I226 (new offset 0xC000/0xE000)
+        E1000E = 0,  // I219, I217, 82574L (legacy offset)
+        IGC = 1      // I225, I226 (0xC000/0xE000)
     };
 
     // ========================================================================
-    // ECAM PCI Config Space
+    // PCI CF8/CFC Port I/O
+    // ========================================================================
+    inline std::uint32_t pci_cf8_read32(std::uint8_t bus, std::uint8_t dev, std::uint8_t func, std::uint8_t reg)
+    {
+        const std::uint32_t addr = 0x80000000u
+            | (static_cast<std::uint32_t>(bus) << 16)
+            | (static_cast<std::uint32_t>(dev) << 11)
+            | (static_cast<std::uint32_t>(func) << 8)
+            | (reg & 0xFC);
+        __outdword(0xCF8, addr);
+        return __indword(0xCFC);
+    }
+
+    inline std::uint16_t pci_cf8_read16(std::uint8_t bus, std::uint8_t dev, std::uint8_t func, std::uint8_t reg)
+    {
+        const std::uint32_t dword = pci_cf8_read32(bus, dev, func, reg & 0xFC);
+        return static_cast<std::uint16_t>(dword >> ((reg & 2) * 8));
+    }
+
+    inline void pci_cf8_write32(std::uint8_t bus, std::uint8_t dev, std::uint8_t func, std::uint8_t reg, std::uint32_t val)
+    {
+        const std::uint32_t addr = 0x80000000u
+            | (static_cast<std::uint32_t>(bus) << 16)
+            | (static_cast<std::uint32_t>(dev) << 11)
+            | (static_cast<std::uint32_t>(func) << 8)
+            | (reg & 0xFC);
+        __outdword(0xCF8, addr);
+        __outdword(0xCFC, val);
+    }
+
+    inline void pci_cf8_write16(std::uint8_t bus, std::uint8_t dev, std::uint8_t func, std::uint8_t reg, std::uint16_t val)
+    {
+        std::uint32_t dword = pci_cf8_read32(bus, dev, func, reg & 0xFC);
+        const int shift = (reg & 2) * 8;
+        dword = (dword & ~(0xFFFF << shift)) | (static_cast<std::uint32_t>(val) << shift);
+        pci_cf8_write32(bus, dev, func, reg & 0xFC, dword);
+    }
+
+    // ========================================================================
+    // ECAM
     // ========================================================================
     inline std::uint64_t ecam_base_detected = 0;
 
     constexpr std::uint64_t ECAM_CANDIDATES[] = {
-        0xE0000000,     // Intel ´ëºÎºĞ
-        0xF0000000,     // AMD ÀÏºÎ
-        0xC0000000,     // ±¸Çü ½Ã½ºÅÛ
-        0xB0000000,     // ·¹¾î ÄÉÀÌ½º
+        0xE0000000, 0xF0000000, 0xC0000000, 0xB0000000,
     };
     constexpr std::uint32_t ECAM_CANDIDATE_COUNT = 4;
 
@@ -53,10 +86,9 @@ namespace nic
     constexpr std::uint32_t PCI_DEVICE_ID = 0x02;
     constexpr std::uint32_t PCI_COMMAND = 0x04;
     constexpr std::uint32_t PCI_STATUS = 0x06;
-    constexpr std::uint32_t PCI_CLASS_CODE = 0x09;
-    constexpr std::uint32_t PCI_HEADER_TYPE = 0x0E;
     constexpr std::uint32_t PCI_BAR0 = 0x10;
     constexpr std::uint32_t PCI_BAR1 = 0x14;
+    constexpr std::uint32_t PCI_CAP_PTR = 0x34;
 
     inline std::uint64_t ecam_address(
         const std::uint8_t bus, const std::uint8_t dev,
@@ -70,26 +102,14 @@ namespace nic
     }
 
     // ========================================================================
-    // Vendor IDs
+    // Vendor / Device IDs
     // ========================================================================
     constexpr std::uint16_t INTEL_VENDOR_ID = 0x8086;
-    constexpr std::uint16_t REALTEK_VENDOR_ID = 0x10EC;
-
-    // ========================================================================
-    // Intel Device IDs
-    // ========================================================================
-    constexpr std::uint16_t INTEL_I219_V = 0x15B8;
-    constexpr std::uint16_t INTEL_I219_LM = 0x15B7;
     constexpr std::uint16_t INTEL_I225_V = 0x15F3;
     constexpr std::uint16_t INTEL_I225_LM = 0x15F2;
     constexpr std::uint16_t INTEL_I226_V = 0x125B;
     constexpr std::uint16_t INTEL_I226_LM = 0x125C;
-    constexpr std::uint16_t INTEL_I210_T1 = 0x1533;
-    constexpr std::uint16_t INTEL_I211_AT = 0x1539;
-    constexpr std::uint16_t INTEL_I350_T1 = 0x1521;
-    constexpr std::uint16_t INTEL_82574L = 0x10D3;
 
-    // [ÇÙ½É] I225/I226 ÆÇº° - igc °è¿­ ·¹Áö½ºÅÍ »ç¿ë
     inline bool is_igc_nic(const std::uint16_t dev_id)
     {
         return dev_id == INTEL_I225_V || dev_id == INTEL_I225_LM
@@ -97,42 +117,41 @@ namespace nic
     }
 
     // ========================================================================
-    // Intel e1000e Register Offsets (I219, I217, 82574L µî)
+    // Intel e1000e Registers (legacy)
     // ========================================================================
     constexpr std::uint32_t INTEL_REG_CTRL = 0x0000;
     constexpr std::uint32_t INTEL_REG_STATUS = 0x0008;
     constexpr std::uint32_t INTEL_REG_CTRL_EXT = 0x0018;
+
+    // CTRL register bits (0x0000)
+    constexpr std::uint32_t CTRL_SLU = (1u << 6);   // Set Link Up
+    constexpr std::uint32_t CTRL_RST = (1u << 26);  // Device Reset (self-clearing)
+    // STATUS register bits (0x0008)
+    constexpr std::uint32_t STATUS_LU = (1u << 1);   // Link Up
     constexpr std::uint32_t INTEL_REG_ICR = 0x00C0;
     constexpr std::uint32_t INTEL_REG_IMS = 0x00D0;
-
-    // e1000e RX (Queue 0)
+    constexpr std::uint32_t INTEL_REG_RCTL = 0x0100;
+    constexpr std::uint32_t INTEL_REG_TCTL = 0x0400;
     constexpr std::uint32_t INTEL_REG_RDBAL = 0x2800;
     constexpr std::uint32_t INTEL_REG_RDBAH = 0x2804;
     constexpr std::uint32_t INTEL_REG_RDLEN = 0x2808;
     constexpr std::uint32_t INTEL_REG_RDH = 0x2810;
     constexpr std::uint32_t INTEL_REG_RDT = 0x2818;
-    constexpr std::uint32_t INTEL_REG_RCTL = 0x0100;
-
-    // e1000e TX (Queue 0)
     constexpr std::uint32_t INTEL_REG_TDBAL = 0x3800;
     constexpr std::uint32_t INTEL_REG_TDBAH = 0x3804;
     constexpr std::uint32_t INTEL_REG_TDLEN = 0x3808;
     constexpr std::uint32_t INTEL_REG_TDH = 0x3810;
     constexpr std::uint32_t INTEL_REG_TDT = 0x3818;
-    constexpr std::uint32_t INTEL_REG_TCTL = 0x0400;
 
     // ========================================================================
-    // [ÇÙ½É] Intel igc Register Offsets (I225-V, I226-V)
+    // [í•µì‹¬] igc Registers (I225-V, I226-V)
     // ========================================================================
-    // igc´Â 0xC000/0xE000 °è¿­ »ç¿ë. RDH/TDH´Â ÀÌ ¿ÀÇÁ¼Â¿¡¼­¸¸ ¾÷µ¥ÀÌÆ®µÊ!
-    // RDBAL/RDLENÀº legacy(0x2800)¿¡¼­µµ ÀĞÈ÷Áö¸¸ RDH´Â ¾ÈµÊ
     constexpr std::uint32_t IGC_REG_RDBAL = 0xC000;
     constexpr std::uint32_t IGC_REG_RDBAH = 0xC004;
     constexpr std::uint32_t IGC_REG_RDLEN = 0xC008;
     constexpr std::uint32_t IGC_REG_SRRCTL = 0xC00C;
     constexpr std::uint32_t IGC_REG_RDH = 0xC010;
     constexpr std::uint32_t IGC_REG_RDT = 0xC018;
-
     constexpr std::uint32_t IGC_REG_TDBAL = 0xE000;
     constexpr std::uint32_t IGC_REG_TDBAH = 0xE004;
     constexpr std::uint32_t IGC_REG_TDLEN = 0xE008;
@@ -140,123 +159,104 @@ namespace nic
     constexpr std::uint32_t IGC_REG_TDT = 0xE018;
 
     // ========================================================================
-    // [ÇÙ½É] IGC Àü¿ë TX Queue 1 - OS Queue 0°ú ¿ÏÀü °İ¸®
+    // IGC TX Queue 1 â€” OS Q0ê³¼ ì™„ì „ ê²©ë¦¬
     // ========================================================================
-    // OS µå¶óÀÌ¹ö´Â TX Q0(0xE000) »ç¿ë. ¿ì¸®´Â Q1(0xE040) Àü¿ë »ç¿ë.
-    // ¡æ OS TDT º¯°æ 0, OS ¹öÆÛ µ¤¾î¾²±â 0, stats Å¬¸®¾î ºÒÇÊ¿ä
-    //
-    // TX Queue N = 0xE000 + N * 0x40:
-    //   Q0: TDBAL=0xE000, TDH=0xE010, TDT=0xE018 (OS Àü¿ë - Àı´ë °Çµå¸®Áö ¾ÊÀ½!)
-    //   Q1: TDBAL=0xE040, TDH=0xE050, TDT=0xE058 (HV Àü¿ë)
-    // ========================================================================
-
     constexpr std::uint32_t IGC_MAX_TX_QUEUES = 4;
     constexpr std::uint32_t IGC_TXQ_STRIDE = 0x40;
-    constexpr std::uint32_t IGC_HV_TX_QUEUE = 1;  // ¿ì¸®°¡ »ç¿ëÇÒ TX Å¥ ¹øÈ£
-
-    // TX Queue 1 ·¹Áö½ºÅÍ ¿ÀÇÁ¼Â
+    constexpr std::uint32_t IGC_HV_TX_QUEUE = 1;
     constexpr std::uint32_t IGC_TXQ1_TDBAL = 0xE040;
     constexpr std::uint32_t IGC_TXQ1_TDBAH = 0xE044;
     constexpr std::uint32_t IGC_TXQ1_TDLEN = 0xE048;
     constexpr std::uint32_t IGC_TXQ1_TDH = 0xE050;
     constexpr std::uint32_t IGC_TXQ1_TDT = 0xE058;
-
-    // TX TXDCTL (Transmit Descriptor Control) per-queue
-    // Q0: 0xE028, Q1: 0xE068, Q2: 0xE0A8, Q3: 0xE0E8
     constexpr std::uint32_t IGC_TXQ1_TXDCTL = 0xE068;
     constexpr std::uint32_t IGC_TXDCTL_ENABLE = (1u << 25);
 
-    // HV Àü¿ë TX »óÅÂ (hidden page ±â¹İ)
+    // ========================================================================
+    // [DPDK-style] Batch TX State
+    // ========================================================================
+    // ê¸°ì¡´: 1 desc + 1 buffer â†’ DD wait per frame â†’ 90 chunks Ã— 9Î¼s = 810Î¼s
+    // ë³€ê²½: 128 desc + 128 buffer â†’ batch enqueue + single TDT write â†’ ~10Î¼s
+    //
+    // Ring layout:
+    //   desc_ring[128] Ã— 16B = 2048B (1 page)
+    //   data_bufs[128] Ã— 2KB = 256KB (64 pages)
+    //
+    // sw_tail: ë‹¤ìŒ enqueue ìœ„ì¹˜ (ìš°ë¦¬ê°€ ê´€ë¦¬)
+    // sw_head: cleanup ì™„ë£Œ ìœ„ì¹˜ (DD í™•ì¸ í›„ ì „ì§„)
+    // nb_tx_free: ì‚¬ìš© ê°€ëŠ¥ slot ìˆ˜ (= ring_size - in_flight - 1)
+    // RS bit: ë§¤ descë§ˆë‹¤ ì„¤ì • (cleanupì´ ê°œë³„ DD í™•ì¸)
+    // TDT: tx_commit()ì—ì„œ 1ë²ˆë§Œ MMIO write
+    // ========================================================================
+    constexpr std::uint32_t BATCH_TX_RING_SIZE = 128;
+    constexpr std::uint32_t BATCH_TX_BUF_SIZE = 2048;  // per-slot buffer
+
     struct igc_hv_tx_state_t
     {
-        std::uint64_t desc_ring_gpa;    // hidden page: TX descriptor ring GPA
-        std::uint64_t data_buf_gpa;     // hidden page: TX data buffer GPA
-        void* desc_ring_va;     // descriptor ring °¡»óÁÖ¼Ò
-        void* data_buf_va;      // data buffer °¡»óÁÖ¼Ò
-        std::uint32_t desc_count;       // descriptor °³¼ö
-        std::uint32_t our_tdt;          // ¿ì¸® TDT ÀÎµ¦½º
-        std::uint32_t dbg_txdctl_val;   // TXDCTL ÃÖÁ¾°ª (bit25=ENABLE È®ÀÎ¿ë)
-        std::uint8_t  initialized;      // ÃÊ±âÈ­ ¿Ï·á ¿©ºÎ
+        // Ring addresses
+        std::uint64_t desc_ring_gpa;
+        void* desc_ring_va;
+        std::uint32_t desc_count;       // = BATCH_TX_RING_SIZE
 
-        // [Áø´Ü 0xFB] TX °æ·Î µğ¹ö±ë (struct ¸â¹ö = TU°£ °øÀ¯ º¸Àå)
-        // inline ½ºÄ®¶ó/¹è¿­Àº freestanding ¸µÄ¿¿¡¼­ TUº° º¹»çº» »ı¼º ¡æ ±úÁü
-        // struct ¸â¹ö´Â igc_hv_tx ÀÎ½ºÅÏ½º°¡ 1°³ÀÌ¹Ç·Î ¾ÈÀü
-        std::uint32_t diag_canary;      // 0xDEAD0000|frame_len (inject ÁøÀÔ È®ÀÎ)
-        std::uint32_t diag_buf_lo;      // data_buf_va low32
-        std::uint32_t diag_buf_hi;      // data_buf_va high32
-        std::uint32_t diag_gpa_lo;      // data_buf_gpa low32
-        std::uint32_t diag_src_dw0;     // raw_frame[0:3] (source È®ÀÎ)
-        std::uint32_t diag_readback;    // buf[0:3] after copy (copy È®ÀÎ)
-        std::uint32_t diag_write_test;  // 0xAA write¡æread (VA ¸ÅÇÎ È®ÀÎ)
+        // Per-slot independent buffers (NIC DMA ì†ŒìŠ¤)
+        std::uint64_t buf_gpa[BATCH_TX_RING_SIZE];  // ê° slotì˜ ë¬¼ë¦¬ì£¼ì†Œ
+        void* buf_va[BATCH_TX_RING_SIZE];    // ê° slotì˜ ê°€ìƒì£¼ì†Œ
 
-        // [0xFB+] TX ÇÁ·¹ÀÓ ³»¿ë Áø´Ü - ¿ÍÀÌ¾î¿¡ ³ª°¡´Â ½ÇÁ¦ ¹ÙÀÌÆ®
-        // °ø°İPC¿¡ µµÂø ¾È ÇÏ¸é DST MAC/IP/Port È®ÀÎ ÇÊ¼ö
-        std::uint32_t diag_eth_dw0;     // frame[0:3]  = DST MAC ¾Õ 4¹ÙÀÌÆ®
-        std::uint32_t diag_eth_dw1;     // frame[4:7]  = DST MAC[4:5] + SRC MAC[0:1]
-        std::uint32_t diag_eth_dw2;     // frame[8:11] = SRC MAC[2:5]
-        std::uint32_t diag_ip_dst;      // frame[30:33] = DST IP (ÀÀ´ä ´ë»ó)
-        std::uint32_t diag_udp_ports;   // frame[34:37] = UDP src_port + dst_port
-        std::uint32_t diag_our_port;    // our_src_port raw (expect 0x396F = 28473 NBO)
-        std::uint32_t diag_atk_port;    // attack_src_port raw
-        std::uint32_t diag_udp_raw8;    // frame[38:41] = UDP len + chksum
+        // SW ring pointers
+        std::uint32_t sw_tail;          // ë‹¤ìŒ enqueue ìœ„ì¹˜
+        std::uint32_t sw_head;          // cleanup ì™„ë£Œ ìœ„ì¹˜
+        std::uint32_t nb_tx_free;       // ì‚¬ìš© ê°€ëŠ¥ slot
+
+        // State
+        std::uint8_t  initialized;
+        std::uint32_t consecutive_fail;
+
+        // [ì§„ë‹¨]
+        std::uint32_t dbg_txdctl_val;
+        std::uint32_t dbg_enqueue_count;   // ì´ enqueue íšŸìˆ˜
+        std::uint32_t dbg_commit_count;    // ì´ commit íšŸìˆ˜
+        std::uint32_t dbg_cleanup_reclaimed; // ì´ íšŒìˆ˜ slot
+        std::uint32_t dbg_ring_full_count; // ring full ë°œìƒ íšŸìˆ˜
     };
-
     inline igc_hv_tx_state_t igc_hv_tx = {};
 
-    // SRRCTL DESCTYPE bits [27:25]
-    constexpr std::uint32_t IGC_SRRCTL_DESCTYPE_MASK = (7u << 25);
-    constexpr std::uint32_t IGC_SRRCTL_DESCTYPE_LEGACY = (0u << 25);
-    constexpr std::uint32_t IGC_SRRCTL_DESCTYPE_ADV = (1u << 25);
-
     // ========================================================================
-    // [ÇÙ½É] IGC ¸ÖÆ¼Å¥ RX - ÀĞ±â Àü¿ë Æú¸µ (NIC ·¹Áö½ºÅÍ ¼öÁ¤ 0)
+    // IGC Multi-Queue RX â€” 4í í´ë§, NIC ë³€ì¡° 0
     // ========================================================================
-    // I225-V´Â RSS·Î 4°³ RX Å¥¿¡ ÆĞÅ¶ ºĞ¹è. Queue 0¸¸ ÀĞÀ¸¸é ´©¶ô ¹ß»ı.
-    // ÇØ°á: 4°³ Å¥ ÀüºÎ Æú¸µ (MRQC/RETA ¼öÁ¤ ¾øÀÌ ÀĞ±â¸¸!)
-    //
-    // Queue N ·¹Áö½ºÅÍ = base(0xC000) + N * 0x40:
-    //   Q0: RDBAL=0xC000, RDH=0xC010, RDT=0xC018
-    //   Q1: RDBAL=0xC040, RDH=0xC050, RDT=0xC058
-    //   Q2: RDBAL=0xC080, RDH=0xC090, RDT=0xC098
-    //   Q3: RDBAL=0xC0C0, RDH=0xC0D0, RDT=0xC0D8
-    // ========================================================================
-
     constexpr std::uint32_t IGC_MAX_RX_QUEUES = 4;
     constexpr std::uint32_t IGC_RXQ_STRIDE = 0x40;
+    constexpr std::uint32_t IGC_SRRCTL_DESCTYPE_MASK = 0x0E000000;
+    constexpr std::uint32_t IGC_SRRCTL_DESCTYPE_LEGACY = 0x00000000;
 
-    // Å¥º° ·¹Áö½ºÅÍ ¿ÀÇÁ¼Â ÇïÆÛ (ÀĞ±â Àü¿ë!)
-    inline std::uint32_t igc_rxq_rdbal(std::uint32_t q) { return 0xC000 + q * IGC_RXQ_STRIDE; }
-    inline std::uint32_t igc_rxq_rdbah(std::uint32_t q) { return 0xC004 + q * IGC_RXQ_STRIDE; }
-    inline std::uint32_t igc_rxq_rdlen(std::uint32_t q) { return 0xC008 + q * IGC_RXQ_STRIDE; }
-    inline std::uint32_t igc_rxq_srrctl(std::uint32_t q) { return 0xC00C + q * IGC_RXQ_STRIDE; }
-    inline std::uint32_t igc_rxq_rdh(std::uint32_t q) { return 0xC010 + q * IGC_RXQ_STRIDE; }
-    inline std::uint32_t igc_rxq_rdt(std::uint32_t q) { return 0xC018 + q * IGC_RXQ_STRIDE; }
-
-    // Å¥º° RX »óÅÂ
     struct igc_rxq_state_t
     {
-        std::uint64_t ring_gpa;         // RX ring ¹°¸®ÁÖ¼Ò
-        std::uint32_t count;            // descriptor °³¼ö
-        std::uint32_t our_index;        // ¿ì¸® ÃßÀû ÀÎµ¦½º
-        std::uint32_t last_known_rdt;   // ¹öÆÛ Ä³½Ã °»½Å ÃßÀû¿ë
-        std::uint32_t scan_cursor;      // 0xFB: È¸Àü ½ºÄ³³Ê À§Ä¡ (ÀüÃ¼ ring ¼øÈ¸)
-        std::uint8_t  active;           // ÀÌ Å¥°¡ À¯È¿ÇÑÁö
-        std::uint8_t  buf_cache_valid;  // ¹öÆÛ ÁÖ¼Ò Ä³½Ã ¿Ï·á ¿©ºÎ
+        std::uint64_t ring_gpa;
+        std::uint32_t count;
+        std::uint32_t our_index;
+        std::uint32_t last_known_rdt;
+        std::uint32_t scan_cursor;
+        std::uint8_t  active;
+        std::uint8_t  buf_cache_valid;
     };
-
     inline igc_rxq_state_t  igc_rxq[IGC_MAX_RX_QUEUES] = {};
     inline std::uint32_t    igc_num_active_queues = 0;
 
-    // Å¥º° buffer address Ä³½Ã (advanced descriptor write-back½Ã addr ¼Ò½Ç ´ëºñ)
     constexpr std::uint32_t MAX_RXQ_BUF_CACHE = 1024;
     inline std::uint64_t igc_rxq_buf_cache[IGC_MAX_RX_QUEUES][MAX_RXQ_BUF_CACHE] = {};
+
+    // Per-queue register offset helpers (Q0=base, Q1=+0x40, Q2=+0x80, Q3=+0xC0)
+    inline std::uint32_t igc_rxq_rdbal(std::uint32_t q) { return IGC_REG_RDBAL + q * IGC_RXQ_STRIDE; }
+    inline std::uint32_t igc_rxq_rdbah(std::uint32_t q) { return IGC_REG_RDBAH + q * IGC_RXQ_STRIDE; }
+    inline std::uint32_t igc_rxq_rdlen(std::uint32_t q) { return IGC_REG_RDLEN + q * IGC_RXQ_STRIDE; }
+    inline std::uint32_t igc_rxq_rdh(std::uint32_t q) { return IGC_REG_RDH + q * IGC_RXQ_STRIDE; }
+    inline std::uint32_t igc_rxq_rdt(std::uint32_t q) { return IGC_REG_RDT + q * IGC_RXQ_STRIDE; }
 
     // MAC
     constexpr std::uint32_t INTEL_REG_RAL0 = 0x5400;
     constexpr std::uint32_t INTEL_REG_RAH0 = 0x5404;
 
     // ========================================================================
-    // Intel TX Statistics (H3 Anti-Detection)
+    // TX Statistics (read-to-clear, anti-detection)
     // ========================================================================
     constexpr std::uint32_t INTEL_STAT_GPTC = 0x4080;
     constexpr std::uint32_t INTEL_STAT_GOTCL = 0x4090;
@@ -273,186 +273,45 @@ namespace nic
     constexpr std::uint8_t INTEL_RX_STATUS_EOP = 0x02;
 
     // ========================================================================
-    // Realtek Device IDs
+    // PCI Capability IDs + MSI/MSI-X
     // ========================================================================
-    constexpr std::uint16_t RTL8168 = 0x8168;  // RTL8111/8168 (1GbE)
-    constexpr std::uint16_t RTL8136 = 0x8136;  // RTL8101/8102E (Fast Ethernet)
-    constexpr std::uint16_t RTL8161 = 0x8161;  // RTL8168 variant
-    constexpr std::uint16_t RTL8125 = 0x8125;  // RTL8125B (2.5GbE)
-    constexpr std::uint16_t RTL8126 = 0x8126;  // RTL8126 (5GbE)
+    constexpr std::uint8_t PCI_CAP_MSI = 0x05;
+    constexpr std::uint8_t PCI_CAP_MSIX = 0x11;
+    inline std::uint8_t msix_cap_offset = 0;
+    inline std::uint8_t msi_cap_offset = 0;
+    inline bool msix_discovered = false;
+    inline std::uint16_t msix_orig_msgctl = 0;
 
     // ========================================================================
-    // Realtek Registers
-    // ========================================================================
-
-    constexpr std::uint32_t RTL_REG_IDR0 = 0x0000;
-    constexpr std::uint32_t RTL_REG_IDR4 = 0x0004;
-    constexpr std::uint32_t RTL_REG_TNPDS_LO = 0x0020;
-    constexpr std::uint32_t RTL_REG_TNPDS_HI = 0x0024;
-    constexpr std::uint32_t RTL_REG_CMD = 0x0037;
-    constexpr std::uint32_t RTL_REG_TPPOLL = 0x0038;
-    constexpr std::uint8_t  RTL_TPPOLL_NPQ = 0x40;
-    constexpr std::uint32_t RTL_REG_TXCONFIG = 0x0040;
-    constexpr std::uint32_t RTL_REG_RXCONFIG = 0x0044;
-    constexpr std::uint32_t RTL_REG_IMR = 0x003C;
-    constexpr std::uint32_t RTL_REG_ISR = 0x003E;
-    constexpr std::uint32_t RTL_REG_RMS = 0x00DA;
-    constexpr std::uint32_t RTL_REG_RDSAR_LO = 0x00E4;
-    constexpr std::uint32_t RTL_REG_RDSAR_HI = 0x00E8;
-
-    // ========================================================================
-    // Realtek Descriptor Flags
-    // ========================================================================
-    constexpr std::uint32_t RTL_DESC_OWN = (1u << 31);
-    constexpr std::uint32_t RTL_DESC_EOR = (1u << 30);
-    constexpr std::uint32_t RTL_DESC_FS = (1u << 29);
-    constexpr std::uint32_t RTL_DESC_LS = (1u << 28);
-    constexpr std::uint32_t RTL_RX_LEN_MASK = 0x00003FFF;
-    constexpr std::uint32_t RTL_TX_LEN_MASK = 0x0000FFFF;
-
-    // ========================================================================
-    // Intel Legacy Descriptors (16B) - e1000e¿ë
+    // Intel Descriptors
     // ========================================================================
 #pragma pack(push, 1)
-
-    struct intel_rx_desc_t
-    {
-        std::uint64_t buffer_addr;
-        std::uint16_t length;
-        std::uint16_t checksum;
-        std::uint8_t  status;       // bit0=DD, bit1=EOP
-        std::uint8_t  errors;
-        std::uint16_t special;
-    };
+    struct intel_rx_desc_t { std::uint64_t buffer_addr; std::uint16_t length; std::uint16_t checksum; std::uint8_t status; std::uint8_t errors; std::uint16_t special; };
     static_assert(sizeof(intel_rx_desc_t) == 16);
-
-    struct intel_tx_desc_t
-    {
-        std::uint64_t buffer_addr;
-        std::uint16_t length;
-        std::uint8_t  cso;
-        std::uint8_t  cmd;
-        std::uint8_t  status;       // bit0=DD
-        std::uint8_t  css;
-        std::uint16_t special;
-    };
+    struct intel_tx_desc_t { std::uint64_t buffer_addr; std::uint16_t length; std::uint8_t cso; std::uint8_t cmd; std::uint8_t status; std::uint8_t css; std::uint16_t special; };
     static_assert(sizeof(intel_tx_desc_t) == 16);
 
-    // ========================================================================
-    // [ÇÙ½É] Intel Advanced RX Descriptor (16B) - I225/igc¿ë
-    // ========================================================================
-    // Read Format (NIC Ã³¸® Àü):
-    //   [0-7]  Packet Buffer Address
-    //   [8-15] Header Buffer Address
-    //
-    // Write-Back Format (NIC Ã³¸® ÈÄ):
-    //   [0-3]  RSS Hash / Fragment Checksum
-    //   [4-7]  Status/Error/PKT_TYPE info
-    //   [8-11] Extended Status (bit0=DD, bit1=EOP) + Extended Error
-    //   [12-15] Length[15:0] (upper 16 bits)
-    //
-    // buffer_addr´Â write-back¿¡¼­ µ¤¾î½áÁö¹Ç·Î »çÀü Ä³½Ì ÇÊ¿ä!
-    // ========================================================================
-
-    // Read format - buffer address Ä³½Ì¿ë
-    struct igc_rx_desc_read_t
-    {
-        std::uint64_t pkt_addr;     // Packet buffer address
-        std::uint64_t hdr_addr;     // Header buffer address
-    };
+    // Advanced RX â€” igc (write-backì—ì„œ buffer_addr ì†Œì‹¤ â†’ ì‚¬ì „ ìºì‹œ í•„ìš”)
+    struct igc_rx_desc_read_t { std::uint64_t pkt_addr; std::uint64_t hdr_addr; };
     static_assert(sizeof(igc_rx_desc_read_t) == 16);
-
-    // Write-back format - ÆĞÅ¶ Ã³¸®¿ë
-    struct igc_rx_desc_wb_t
-    {
-        std::uint32_t rss_hash;
-        std::uint32_t info;         // SPH, HDR_LEN, PKT_TYPE etc.
-        std::uint32_t staterr;      // bit0=DD, bit1=EOP, bits 4-7=errors
-        std::uint16_t length;       // packet length
-        std::uint16_t vlan;
-    };
+    struct igc_rx_desc_wb_t { std::uint32_t rss_hash; std::uint32_t info; std::uint32_t staterr; std::uint16_t length; std::uint16_t vlan; };
     static_assert(sizeof(igc_rx_desc_wb_t) == 16);
 
-    // Advanced TX descriptor (I225/igc)
-    struct igc_tx_desc_t
-    {
-        std::uint64_t buffer_addr;
-        std::uint32_t cmd_type_len; // bit24=DEXT, bit25=RS, bit24=IFCS, bits 0-15=length
-        std::uint32_t olinfo_status;
-    };
+    // Advanced TX â€” igc
+    struct igc_tx_desc_t { std::uint64_t buffer_addr; std::uint32_t cmd_type_len; std::uint32_t olinfo_status; };
     static_assert(sizeof(igc_tx_desc_t) == 16);
-
-    // Advanced descriptor status bits
-    constexpr std::uint32_t IGC_RXD_STAT_DD = 0x01;
-    constexpr std::uint32_t IGC_RXD_STAT_EOP = 0x02;
-
-    // Advanced TX cmd_type_len bits
-    // [ÇÙ½É] I225-V Advanced TX Data Descriptor ºñÆ® Á¤ÀÇ
-    // Linux igc_defines.h ÂüÁ¶: DEXT(bit29)°¡ ¹İµå½Ã 1ÀÌ¾î¾ß Advanced descriptor·Î ÀÎ½Ä
-    // DEXT=0ÀÌ¸é Legacy descriptor·Î ÇØ¼® ¡æ NIC°¡ DD´Â ¼¼¿ìÁö¸¸ ½ÇÁ¦ Àü¼Û ¾È ÇÔ!
-    constexpr std::uint32_t IGC_TXD_DTYP_DATA = (3u << 20);  // bits[21:20]=11 = Data descriptor
-    constexpr std::uint32_t IGC_TXD_CMD_EOP = (1u << 24);  // End of Packet
-    constexpr std::uint32_t IGC_TXD_CMD_IFCS = (1u << 25);  // Insert FCS (CRC)
-    constexpr std::uint32_t IGC_TXD_CMD_RS = (1u << 27);  // Report Status (DD ¼¼¿ò)
-    constexpr std::uint32_t IGC_TXD_CMD_DEXT = (1u << 29);  // Descriptor Extension = Advanced!
-    constexpr std::uint32_t IGC_TXD_STAT_DD = 0x01; // in olinfo_status
-
-    // [ÇÙ½É] Advanced TX descriptorÀÇ olinfo_status ÇÊµå
-    // bits[31:14] = PAYLEN: MACÀÌ wire¿¡ º¸³¾ ÃÑ ÆĞÅ¶ Å©±â
-    // PAYLEN=0ÀÌ¸é NIC°¡ DMA read´Â ÇÏÁö¸¸ wire¿¡ 0¹ÙÀÌÆ® Àü¼Û = ½ÇÁúÀû Àü¼Û ¾È µÊ!
-    // Linux igc µå¶óÀÌ¹ö: olinfo_status = size << IGC_ADVTXD_PAYLEN_SHIFT
-    constexpr std::uint32_t IGC_TXD_PAYLEN_SHIFT = 14;
-
-    // ========================================================================
-    // Realtek Descriptors
-    // ========================================================================
-    struct rtl_rx_desc_t
-    {
-        std::uint32_t opts1;
-        std::uint32_t opts2;
-        std::uint32_t addr_lo;
-        std::uint32_t addr_hi;
-    };
-    static_assert(sizeof(rtl_rx_desc_t) == 16);
-
-    struct rtl_tx_desc_t
-    {
-        std::uint32_t opts1;
-        std::uint32_t opts2;
-        std::uint32_t addr_lo;
-        std::uint32_t addr_hi;
-    };
-    static_assert(sizeof(rtl_tx_desc_t) == 16);
-
-    struct rtl_rx_desc_32_t
-    {
-        std::uint32_t opts1;
-        std::uint32_t opts2;
-        std::uint32_t addr_lo;
-        std::uint32_t addr_hi;
-        std::uint32_t rss_lo;
-        std::uint32_t rss_hi;
-        std::uint32_t opts3;
-        std::uint32_t opts4;
-    };
-    static_assert(sizeof(rtl_rx_desc_32_t) == 32);
-
-    struct rtl_tx_desc_32_t
-    {
-        std::uint32_t opts1;
-        std::uint32_t opts2;
-        std::uint32_t addr_lo;
-        std::uint32_t addr_hi;
-        std::uint32_t opts3;
-        std::uint32_t opts4;
-        std::uint32_t reserved1;
-        std::uint32_t reserved2;
-    };
-    static_assert(sizeof(rtl_tx_desc_32_t) == 32);
-
 #pragma pack(pop)
 
-    constexpr std::uint32_t RTL_MAX_RING_SCAN = 4096;
+    constexpr std::uint32_t IGC_RXD_STAT_DD = 0x01;
+    constexpr std::uint32_t IGC_RXD_STAT_EOP = 0x02;
+    // [í•µì‹¬] DEXT(bit29)=1 í•„ìˆ˜! ì—†ìœ¼ë©´ Legacyë¡œ í•´ì„ â†’ ì „ì†¡ ì•ˆ ë¨
+    constexpr std::uint32_t IGC_TXD_DTYP_DATA = (3u << 20);
+    constexpr std::uint32_t IGC_TXD_CMD_EOP = (1u << 24);
+    constexpr std::uint32_t IGC_TXD_CMD_IFCS = (1u << 25);
+    constexpr std::uint32_t IGC_TXD_CMD_RS = (1u << 27);
+    constexpr std::uint32_t IGC_TXD_CMD_DEXT = (1u << 29);
+    constexpr std::uint32_t IGC_TXD_STAT_DD = 0x01;
+    constexpr std::uint32_t IGC_TXD_PAYLEN_SHIFT = 14;  // PAYLEN=0ì´ë©´ ì „ì†¡ ì•ˆ ë¨!
 
     // ========================================================================
     // NIC State
@@ -460,113 +319,44 @@ namespace nic
     struct nic_state_t
     {
         nic_type_t    nic_type;
-        intel_gen_t   intel_gen;    // [ÇÙ½É] e1000e vs igc ±¸ºĞ
-
+        intel_gen_t   intel_gen;
         std::uint8_t  bus;
         std::uint8_t  dev;
         std::uint8_t  func;
         std::uint16_t vendor_id;
         std::uint16_t device_id;
-
         std::uint64_t mmio_base_gpa;
-
-        // RX ring
         std::uint64_t rx_ring_gpa;
         std::uint32_t rx_ring_len;
         std::uint32_t rx_count;
-
-        // TX ring
         std::uint64_t tx_ring_gpa;
         std::uint32_t tx_ring_len;
         std::uint32_t tx_count;
-
         std::uint32_t our_rx_index;
         std::uint32_t our_tx_index;
-
-        std::uint32_t rtl_desc_stride;  // 16 or 32
-
-        // [ÇÙ½É] igc advanced descriptor ¿©ºÎ
-        std::uint8_t  use_adv_desc;     // 1=advanced(igc), 0=legacy(e1000e)
-
-        // MAC
+        std::uint8_t  use_adv_desc;
         std::uint8_t  mac[6];
-
         std::uint8_t  attack_mac[6];
         std::uint8_t  attack_mac_learned;
         std::uint32_t attack_ip;
-
         std::uint8_t  initialized;
     };
 
-    // ========================================================================
-    // [ÇÙ½É] ·¹Áö½ºÅÍ ¿ÀÇÁ¼Â ÇïÆÛ - e1000e vs igc ÀÚµ¿ ¼±ÅÃ
-    // ========================================================================
-    inline std::uint32_t reg_rdh(const nic_state_t& s)
-    {
-        return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_RDH : INTEL_REG_RDH;
-    }
+    // ë ˆì§€ìŠ¤í„° ì˜¤í”„ì…‹ í—¬í¼
+    inline std::uint32_t reg_rdh(const nic_state_t& s) { return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_RDH : INTEL_REG_RDH; }
+    inline std::uint32_t reg_rdt(const nic_state_t& s) { return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_RDT : INTEL_REG_RDT; }
+    inline std::uint32_t reg_tdh(const nic_state_t& s) { return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_TDH : INTEL_REG_TDH; }
+    inline std::uint32_t reg_tdt(const nic_state_t& s) { return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_TDT : INTEL_REG_TDT; }
+    inline std::uint32_t reg_rdbal(const nic_state_t& s) { return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_RDBAL : INTEL_REG_RDBAL; }
+    inline std::uint32_t reg_rdbah(const nic_state_t& s) { return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_RDBAH : INTEL_REG_RDBAH; }
+    inline std::uint32_t reg_rdlen(const nic_state_t& s) { return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_RDLEN : INTEL_REG_RDLEN; }
+    inline std::uint32_t reg_tdbal(const nic_state_t& s) { return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_TDBAL : INTEL_REG_TDBAL; }
+    inline std::uint32_t reg_tdbah(const nic_state_t& s) { return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_TDBAH : INTEL_REG_TDBAH; }
+    inline std::uint32_t reg_tdlen(const nic_state_t& s) { return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_TDLEN : INTEL_REG_TDLEN; }
 
-    inline std::uint32_t reg_rdt(const nic_state_t& s)
-    {
-        return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_RDT : INTEL_REG_RDT;
-    }
-
-    inline std::uint32_t reg_tdh(const nic_state_t& s)
-    {
-        return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_TDH : INTEL_REG_TDH;
-    }
-
-    inline std::uint32_t reg_tdt(const nic_state_t& s)
-    {
-        return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_TDT : INTEL_REG_TDT;
-    }
-
-    inline std::uint32_t reg_rdbal(const nic_state_t& s)
-    {
-        return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_RDBAL : INTEL_REG_RDBAL;
-    }
-
-    inline std::uint32_t reg_rdbah(const nic_state_t& s)
-    {
-        return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_RDBAH : INTEL_REG_RDBAH;
-    }
-
-    inline std::uint32_t reg_rdlen(const nic_state_t& s)
-    {
-        return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_RDLEN : INTEL_REG_RDLEN;
-    }
-
-    inline std::uint32_t reg_tdbal(const nic_state_t& s)
-    {
-        return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_TDBAL : INTEL_REG_TDBAL;
-    }
-
-    inline std::uint32_t reg_tdbah(const nic_state_t& s)
-    {
-        return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_TDBAH : INTEL_REG_TDBAH;
-    }
-
-    inline std::uint32_t reg_tdlen(const nic_state_t& s)
-    {
-        return (s.intel_gen == intel_gen_t::IGC) ? IGC_REG_TDLEN : INTEL_REG_TDLEN;
-    }
-
-    // ========================================================================
-    // [ÇÙ½É] VA¡æGPA º¯È¯ - Èü ÇÒ´ç ÆäÀÌÁöÀÇ ¹°¸®ÁÖ¼Ò °è»ê
-    // ========================================================================
-    // HV ÈüÀº ¿¬¼Ó ¹°¸® ¸Ş¸ğ¸®¸¦ ¼±Çü ¸ÅÇÎ:
-    //   map_host_physical(heap_phys_base) ¡æ heap_va_base
-    //   offset = heap_va_base - heap_phys_base (»ó¼ö)
-    //   PA = VA - offset
-    //
-    // entry_point()¿¡¼­ ÇÑ¹ø °è»ê ÈÄ ¸ğµç Èü VA¿¡ Àû¿ë °¡´É.
-    // ¿ëµµ: TX Queue 1 Àü¿ë descriptor ring + data bufferÀÇ GPA °è»ê
-    //       ¡æ NIC TDBAL/TDBAH¿¡ GPA¸¦ ½á¾ß ÇÏ¹Ç·Î ÇÊ¼ö
-    // ========================================================================
-    inline std::int64_t  heap_va_to_pa_offset = 0;  // VA - PA
-    inline std::uint8_t  heap_va_pa_valid = 0;       // ÃÊ±âÈ­ ¿Ï·á ¿©ºÎ
-
-    // VA¡æGPA º¯È¯ (Èü ÇÒ´ç ÆäÀÌÁö Àü¿ë)
+    // VAâ†’GPA ë³€í™˜
+    inline std::int64_t  heap_va_to_pa_offset = 0;
+    inline std::uint8_t  heap_va_pa_valid = 0;
     inline std::uint64_t va_to_gpa(const void* va)
     {
         return static_cast<std::uint64_t>(
@@ -574,6 +364,25 @@ namespace nic
             - heap_va_to_pa_offset);
     }
 
+    // ========================================================================
+    // Debug counters
+    // ========================================================================
+    inline std::uint32_t dbg_scan_total_devs = 0;
+    inline std::uint32_t dbg_scan_intel_found = 0;
+    inline std::uint32_t dbg_scan_igc_found = 0;
+    inline std::uint32_t dbg_scan_map_fail = 0;
+    inline std::uint16_t dbg_scan_last_vid = 0;
+    inline std::uint16_t dbg_scan_last_did = 0;
+    inline std::uint8_t  dbg_scan_last_bus = 0;
+    inline std::uint8_t  dbg_match_bus = 0xFF;
+    inline std::uint8_t  dbg_fail_step = 0;
+    inline std::uint32_t dbg_bar0_raw = 0;
+    inline std::uint8_t  dbg_class = 0;
+    inline std::uint8_t  dbg_subclass = 0;
+    inline std::uint16_t dbg_pci_cmd_before = 0;
+    inline std::uint16_t dbg_pci_cmd_after = 0;
+
+    // ========================================================================
     // Functions
     // ========================================================================
     std::uint32_t read_reg(const void* slat_cr3, std::uint32_t offset);
@@ -581,26 +390,13 @@ namespace nic
     std::uint8_t read_reg8(const void* slat_cr3, std::uint32_t offset);
     void write_reg8(const void* slat_cr3, std::uint32_t offset, std::uint8_t value);
 
-    inline bool is_rtl_25g_or_higher(const std::uint16_t dev_id)
-    {
-        return dev_id == RTL8125 || dev_id == RTL8126;
-    }
-
     inline nic_state_t state = {};
 
-    // ========================================================================
-    // [ÇÙ½É] RX buffer address cache - igc advanced descriptor¿ë
-    // ========================================================================
-    // Advanced write-back¿¡¼­ buffer_addr°¡ RSS hash·Î µ¤¾î½áÁö¹Ç·Î
-    // read format¿¡¼­ ¹Ì¸® Ä³½ÌÇØµÖ¾ß ÇÔ. ÃÖ´ë 1024°³.
     constexpr std::uint32_t MAX_RX_BUF_CACHE = 1024;
     inline std::uint64_t rx_buf_cache[MAX_RX_BUF_CACHE] = {};
     inline std::uint8_t rx_buf_cache_valid = 0;
 
-    // ========================================================================
-    // TX Stats Clear
-    // ========================================================================
-    inline void clear_tx_stats_intel(const void* slat_cr3_ptr)
+    inline void clear_tx_stats(const void* slat_cr3_ptr)
     {
         (void)read_reg(slat_cr3_ptr, INTEL_STAT_GPTC);
         (void)read_reg(slat_cr3_ptr, INTEL_STAT_GOTCL);
@@ -610,43 +406,37 @@ namespace nic
         (void)read_reg(slat_cr3_ptr, INTEL_STAT_TOTH);
     }
 
-    constexpr std::uint32_t RTL_REG_DTCCR_LO = 0x0010;
-    constexpr std::uint32_t RTL_REG_DTCCR_HI = 0x0014;
-
-    inline void clear_tx_stats_realtek(const void* slat_cr3_ptr)
-    {
-        std::uint32_t dtccr_lo = read_reg(slat_cr3_ptr, RTL_REG_DTCCR_LO);
-        std::uint32_t dtccr_hi = read_reg(slat_cr3_ptr, RTL_REG_DTCCR_HI);
-
-        if ((dtccr_lo & ~0xFu) != 0 || dtccr_hi != 0)
-        {
-            write_reg(slat_cr3_ptr, RTL_REG_DTCCR_HI, dtccr_hi);
-            write_reg(slat_cr3_ptr, RTL_REG_DTCCR_LO, (dtccr_lo & ~0xF) | 0x09);
-        }
-    }
-
-    inline void clear_tx_stats(const void* slat_cr3_ptr)
-    {
-        if (state.nic_type == nic_type_t::INTEL)
-            clear_tx_stats_intel(slat_cr3_ptr);
-        else if (state.nic_type == nic_type_t::REALTEK)
-            clear_tx_stats_realtek(slat_cr3_ptr);
-    }
-
     std::uint8_t discover_nic(const void* slat_cr3);
     std::uint8_t read_ring_config(const void* slat_cr3);
     void read_mac(const void* slat_cr3);
-    void cache_rx_buf_addrs(const void* slat_cr3); // [ÇÙ½É] buffer address Ä³½Ì
-
-    // [ÇÙ½É] IGC ¸ÖÆ¼Å¥ ÃÊ±âÈ­ - 4°³ RX Å¥ ¼³Á¤ ·Îµå (ÀĞ±â Àü¿ë!)
+    void cache_rx_buf_addrs(const void* slat_cr3);
     std::uint8_t read_igc_multi_queue_config(const void* slat_cr3);
     void cache_igc_queue_buf_addrs(const void* slat_cr3, std::uint32_t queue_idx);
     void refresh_igc_queue_buf_cache(const void* slat_cr3, std::uint32_t queue_idx);
-
-    // [ÇÙ½É] IGC Àü¿ë TX Queue 1 ÃÊ±âÈ­ - hidden page ÇÒ´ç + NIC ¼³Á¤
     std::uint8_t setup_igc_hv_tx_queue(const void* slat_cr3);
-
-    // [FIX] OPEN ¼ö½Å ½Ã TX ring ¸®¼Â - Ãë¼Ò ÈÄ ring stuck ¹æÁö
-    // Å¬¶óÀÌ¾ğÆ® Ãë¼Ò ¡æ TX ring full (TDT==TDH, DD ¹ÌÅ¬¸®¾î) ¡æ Àç¿¬°á ºÒ°¡
     void reset_tx_ring(const void* slat_cr3);
+
+    // ========================================================================
+    // [EPT MMIO Intercept] TXQ1 ì“°ê¸° ì°¨ë‹¨
+    // ========================================================================
+    // BAR0+0xE000 pageë¥¼ EPTì—ì„œ read-onlyë¡œ ì„¤ì •
+    // Guestê°€ TXQ1(0xE040-0xE068)ì— write â†’ ë¬´ì‹œ (advance RIP)
+    // Guestê°€ TXQ0/Q2/Q3ì— write â†’ ì¼ì‹œ í—ˆìš© í›„ ì¬ë³´í˜¸
+    //
+    // TXQ1 offset range (BAR0 ê¸°ì¤€):
+    //   0xE040 TDBAL, 0xE044 TDBAH, 0xE048 TDLEN
+    //   0xE050 TDH, 0xE058 TDT, 0xE068 TXDCTL
+    // ========================================================================
+    namespace mmio_protect
+    {
+        inline std::uint64_t txq_page_gpa = 0;       // BAR0 + 0xE000 (page-aligned GPA)
+        inline std::uint8_t  enabled = 0;             // EPT protection active
+        inline std::uint8_t  reprotect_pending = 0;   // passthrough í›„ ì¬ë³´í˜¸ í•„ìš”
+        inline std::uint32_t dbg_txq1_blocked = 0;    // TXQ1 ì“°ê¸° ì°¨ë‹¨ íšŸìˆ˜
+        inline std::uint32_t dbg_passthrough = 0;     // non-TXQ1 ì“°ê¸° í†µê³¼ íšŸìˆ˜
+
+        // TXQ1 register range (page ë‚´ offset)
+        constexpr std::uint32_t TXQ1_OFFSET_START = 0x040;  // 0xE040 & 0xFFF
+        constexpr std::uint32_t TXQ1_OFFSET_END = 0x070;  // 0xE068 + 4 = 0xE06C, round up
+    }
 }

@@ -44,13 +44,9 @@ namespace
 
     std::uint32_t our_ip = 0;
     std::uint16_t our_src_port = 0;
-    std::uint16_t attack_src_port = 0;  // [핵심] 공격 PC의 ephemeral src_port (network byte order)
+    std::uint16_t attack_src_port = 0;
     cr3 cached_slat_cr3 = {};
 
-    // [핵심] 0xF9: 폴링 간격 = 0 (모든 VMEXIT에서 즉시 폴링)
-    // 이전: 1,500,000 TSC (~500μs) → NIC 인터럽트 VMEXIT에서도 throttle → stale data
-    // NIC가 패킷 수신 → DD=1 → MSI-X → VMEXIT → 여기서 즉시 읽어야 Guest ISR보다 먼저!
-    // fast path(DD=0)는 descriptor 1개 읽기만 하므로 성능 영향 최소
     constexpr std::uint64_t POLL_INTERVAL_TSC = 0;
     std::uint64_t last_poll_tsc = 0;
     std::uint64_t poll_counter = 0;
@@ -61,35 +57,19 @@ namespace
     }
 
     // ========================================================================
-    // [핵심] Deferred TX State Machine
+    // Deferred TX State Machine
     // ========================================================================
-    // 문제: CHUNK_SIZE=256 → 응답 1MB → 722 UDP chunks → 722 inject calls
-    //       722 × 12µs = 8.7ms → 한 VMEXIT에서 실행시 Hyper-V 워치독 발동
-    //
-    // 해결: VMEXIT당 MAX_CHUNKS_PER_EXIT개만 전송, 나머지는 다음 VMEXIT에서 계속
-    //       process_pending() 진입시 먼저 pending TX 확인 → flush → 그 후 RX poll
-    //
-    // 성능:
-    //   MAX=100: 100 × 12µs = 1.2ms/VMEXIT (안전)
-    //   722 chunks / 100 = 8 VMEXITs per response
-    //   25 responses × 8 VMEXITs × 1.2ms = 240ms total (< 1초)
-    // ========================================================================
-    // [핵심] VMEXIT당 전송 chunk 수
-    // CHUNK_SIZE=64 pages → 256KB 응답 → ~175 UDP chunks
-    // 200으로 설정: 175 < 200이므로 한 VMEXIT에서 응답 완료 보장
-    // 175 × 12µs = 2.1ms per VMEXIT (안전, 사망은 ~5ms+)
-    // VMEXIT 빈도 의존성 제거 → 안정적 전송
-    constexpr std::uint32_t MAX_CHUNKS_PER_EXIT = 200;
+    constexpr std::uint32_t MAX_CHUNKS_PER_EXIT = 100;
 
     struct deferred_tx_state_t
     {
-        std::uint8_t  active;          // 전송 진행중 플래그
-        std::uint32_t next_chunk;      // 다음 전송할 chunk index
-        std::uint32_t total_chunks;    // 전체 chunk 수
-        std::uint32_t payload_size;    // response_buffer 내 데이터 크기
-        std::uint32_t response_seq;    // 현재 응답 시퀀스
-        std::uint32_t chunks_sent_ok;  // 성공 카운트
-        std::uint64_t start_tsc;       // 전송 시작 TSC (stale timeout용)
+        std::uint8_t  active;
+        std::uint32_t next_chunk;
+        std::uint32_t total_chunks;
+        std::uint32_t payload_size;
+        std::uint32_t response_seq;
+        std::uint32_t chunks_sent_ok;
+        std::uint64_t start_tsc;
     };
     deferred_tx_state_t deferred_tx = {};
     std::uint32_t deferred_tx_seq_counter = 0;
@@ -104,7 +84,7 @@ namespace
 }
 
 // ============================================================================
-// NIC Register R/W
+// NIC Register R/W — MMIO only (Intel I225-V)
 // ============================================================================
 
 std::uint32_t nic::read_reg(const void* slat_cr3_ptr, const std::uint32_t offset)
@@ -140,13 +120,36 @@ void nic::write_reg8(const void* slat_cr3_ptr, const std::uint32_t offset, const
 }
 
 // ============================================================================
-// NIC Discovery
+// NIC Discovery - Intel I225/I226 ONLY, HIGHEST BUS 우선 (PCIe 슬롯 카드 선택)
+// ============================================================================
+// Intel I225-V (igc) NIC discovery — Intel only
+// ECAM PCI scan → I225/I226 detection → BAR0 MMIO setup
+// I225-V: MMIO BAR0, igc 드라이버, TX Q1 격리 전송 작동 확인됨
+//
+// 문제: 온보드 Intel NIC도 있을 수 있음
+// 해결: 전체 bus 스캔 후 가장 높은 bus의 I225/I226 선택
+//       → PCIe 슬롯 카드는 root port 브릿지를 거쳐 항상 높은 bus 배정
 // ============================================================================
 
 std::uint8_t nic::discover_nic(const void* slat_cr3_ptr)
 {
     const cr3 slat = *static_cast<const cr3*>(slat_cr3_ptr);
 
+    // 디버그 카운터 리셋
+    dbg_scan_total_devs = 0;
+    dbg_scan_intel_found = 0;      // Intel match count로 재활용
+    dbg_scan_igc_found = 0;  // I225/I226 match count로 재활용
+    dbg_scan_map_fail = 0;
+    dbg_scan_last_vid = 0;
+    dbg_scan_last_did = 0;
+    dbg_scan_last_bus = 0;
+    dbg_match_bus = 0xFF;    // best match bus로 재활용
+    dbg_fail_step = 0;
+    dbg_bar0_raw = 0;
+    dbg_class = 0;
+    dbg_subclass = 0;
+
+    // ECAM base 탐지
     if (ecam_base_detected == 0)
     {
         for (std::uint32_t i = 0; i < ECAM_CANDIDATE_COUNT; i++)
@@ -166,6 +169,14 @@ std::uint8_t nic::discover_nic(const void* slat_cr3_ptr)
         if (ecam_base_detected == 0) return 0;
     }
 
+    // [Intel I225/I226 HIGHEST BUS] 전체 스캔
+    std::uint8_t  best_bus = 0;
+    std::uint8_t  best_dev = 0;
+    std::uint8_t  best_func = 0;
+    std::uint16_t best_did = 0;
+    std::uint64_t best_mmio = 0;
+    std::uint8_t  found = 0;
+
     for (std::uint8_t bus = 0; bus < 32; bus++)
     {
         for (std::uint8_t dev = 0; dev < 32; dev++)
@@ -175,45 +186,67 @@ std::uint8_t nic::discover_nic(const void* slat_cr3_ptr)
                 const std::uint64_t vid_gpa = ecam_address(bus, dev, func, PCI_VENDOR_ID);
                 const auto* vid_ptr = static_cast<const std::uint16_t*>(
                     memory_manager::map_guest_physical(slat, vid_gpa));
-                if (!vid_ptr) continue;
+                if (!vid_ptr) { dbg_scan_map_fail++; continue; }
 
                 const std::uint16_t vendor_id = *vid_ptr;
-                if (vendor_id == 0xFFFF) continue;
+                if (vendor_id == 0xFFFF || vendor_id == 0x0000) continue;
 
-                if (vendor_id != INTEL_VENDOR_ID && vendor_id != REALTEK_VENDOR_ID)
-                    continue;
+                dbg_scan_total_devs++;
+                dbg_scan_last_vid = vendor_id;
+                dbg_scan_last_bus = bus;
 
-                const std::uint64_t class_gpa = ecam_address(bus, dev, func, 0x0B);
-                const auto* class_ptr = static_cast<const std::uint8_t*>(
-                    memory_manager::map_guest_physical(slat, class_gpa));
-                if (!class_ptr) continue;
+                // [핵심] Intel만 허용
+                if (vendor_id != INTEL_VENDOR_ID) continue;
+                dbg_scan_intel_found++;  // Intel match count
 
-                const std::uint64_t subclass_gpa = ecam_address(bus, dev, func, 0x0A);
-                const auto* subclass_ptr = static_cast<const std::uint8_t*>(
-                    memory_manager::map_guest_physical(slat, subclass_gpa));
-                if (!subclass_ptr) continue;
-
-                if (*class_ptr != PCI_CLASS_NETWORK || *subclass_ptr != PCI_SUBCLASS_ETHERNET)
-                    continue;
-
-                // Device ID
+                // Device ID 읽기
                 const std::uint64_t did_gpa = ecam_address(bus, dev, func, PCI_DEVICE_ID);
                 const auto* did_ptr = static_cast<const std::uint16_t*>(
                     memory_manager::map_guest_physical(slat, did_gpa));
                 if (!did_ptr) continue;
 
-                // BAR0 (MMIO)
+                const std::uint16_t device_id = *did_ptr;
+                dbg_scan_last_did = device_id;
+
+                // [핵심] I225/I226 계열만 허용 (igc 드라이버)
+                if (!is_igc_nic(device_id)) continue;
+                dbg_scan_igc_found++;  // I225/I226 match count
+
+                // Class code 확인
+                const std::uint64_t class_gpa = ecam_address(bus, dev, func, 0x0B);
+                const auto* class_ptr = static_cast<const std::uint8_t*>(
+                    memory_manager::map_guest_physical(slat, class_gpa));
+                if (!class_ptr) { dbg_fail_step = 1; continue; }
+
+                const std::uint64_t subclass_gpa = ecam_address(bus, dev, func, 0x0A);
+                const auto* subclass_ptr = static_cast<const std::uint8_t*>(
+                    memory_manager::map_guest_physical(slat, subclass_gpa));
+                if (!subclass_ptr) { dbg_fail_step = 2; continue; }
+
+                dbg_class = *class_ptr;
+                dbg_subclass = *subclass_ptr;
+
+                if (*class_ptr != PCI_CLASS_NETWORK || *subclass_ptr != PCI_SUBCLASS_ETHERNET)
+                {
+                    dbg_fail_step = 3; continue;
+                }
+
+                // BAR0 (MMIO) — Intel I225-V는 BAR0=MMIO (64-bit)
                 const std::uint64_t bar0_gpa = ecam_address(bus, dev, func, PCI_BAR0);
                 const auto* bar0_ptr = static_cast<const std::uint32_t*>(
                     memory_manager::map_guest_physical(slat, bar0_gpa));
-                if (!bar0_ptr) continue;
+                if (!bar0_ptr) { dbg_fail_step = 4; continue; }
 
-                std::uint32_t bar0_low = *bar0_ptr;
-                if (bar0_low & 1) continue;
+                std::uint32_t bar_low = *bar0_ptr;
+                dbg_bar0_raw = bar_low;
 
-                std::uint64_t mmio_base = bar0_low & 0xFFFFFFF0;
+                // BAR0 bit0=1 → I/O space → Intel MMIO 아님, skip
+                if (bar_low & 1) { dbg_fail_step = 5; continue; }
 
-                if (((bar0_low >> 1) & 3) == 2) {
+                std::uint64_t mmio_base = bar_low & 0xFFFFFFF0;
+
+                // 64-bit BAR 체크: bit[2:1] = 10b → 64-bit
+                if (((bar_low >> 1) & 3) == 2) {
                     const std::uint64_t bar1_gpa = ecam_address(bus, dev, func, PCI_BAR1);
                     const auto* bar1_ptr = static_cast<const std::uint32_t*>(
                         memory_manager::map_guest_physical(slat, bar1_gpa));
@@ -221,35 +254,55 @@ std::uint8_t nic::discover_nic(const void* slat_cr3_ptr)
                         mmio_base |= (static_cast<std::uint64_t>(*bar1_ptr) << 32);
                 }
 
-                if (mmio_base == 0 || mmio_base == 0xFFFFFFF0) continue;
+                if (mmio_base == 0 || mmio_base == 0xFFFFFFF0) { dbg_fail_step = 6; continue; }
 
-                state.bus = bus;
-                state.dev = dev;
-                state.func = func;
-                state.vendor_id = vendor_id;
-                state.device_id = *did_ptr;
-                state.mmio_base_gpa = mmio_base;
+                dbg_fail_step = 7; // OK - passed all checks
 
-                if (vendor_id == INTEL_VENDOR_ID)
+                // [핵심] 가장 높은 bus 선택 (PCIe 슬롯 우선)
+                if (!found || bus > best_bus ||
+                    (bus == best_bus && dev > best_dev) ||
+                    (bus == best_bus && dev == best_dev && func > best_func))
                 {
-                    state.nic_type = nic_type_t::INTEL;
-                    // [핵심] I225/I226 → igc 레지스터 오프셋 사용
-                    state.intel_gen = is_igc_nic(*did_ptr)
-                        ? intel_gen_t::IGC : intel_gen_t::E1000E;
+                    best_bus = bus;
+                    best_dev = dev;
+                    best_func = func;
+                    best_did = device_id;
+                    best_mmio = mmio_base;
+                    found = 1;
                 }
-                else if (vendor_id == REALTEK_VENDOR_ID)
-                {
-                    state.nic_type = nic_type_t::REALTEK;
-                    state.rtl_desc_stride = is_rtl_25g_or_higher(*did_ptr) ? 32 : 16;
-                }
-                else
-                    state.nic_type = nic_type_t::UNKNOWN;
-
-                return 1;
             }
         }
     }
-    return 0;
+
+    if (!found) return 0;
+
+    state.bus = best_bus;
+    state.dev = best_dev;
+    state.func = best_func;
+    state.vendor_id = INTEL_VENDOR_ID;
+    state.device_id = best_did;
+    state.mmio_base_gpa = best_mmio;
+    state.nic_type = nic_type_t::INTEL;
+    state.intel_gen = intel_gen_t::IGC;  // I225/I226 = igc
+
+    dbg_match_bus = best_bus;  // best match bus 기록
+
+    // ================================================================
+    // CMD 활성화 — Bus Master + Memory Space
+    // ================================================================
+    {
+        dbg_pci_cmd_before = pci_cf8_read16(best_bus, best_dev, best_func, 0x04);
+
+        if ((dbg_pci_cmd_before & 0x0006) != 0x0006)  // MEM + Bus Master 필요
+        {
+            pci_cf8_write16(best_bus, best_dev, best_func, 0x04,
+                dbg_pci_cmd_before | 0x0006);  // MEM+BM
+            for (volatile int delay = 0; delay < 5000000; delay++) {}
+        }
+        dbg_pci_cmd_after = pci_cf8_read16(best_bus, best_dev, best_func, 0x04);
+    }
+
+    return 1;
 }
 
 // ============================================================================
@@ -300,71 +353,9 @@ std::uint8_t nic::read_ring_config(const void* slat_cr3_ptr)
             state.use_adv_desc = 0;
         }
     }
-    else if (state.nic_type == nic_type_t::REALTEK)
-    {
-        const std::uint32_t rdsar_lo = read_reg(slat_cr3_ptr, RTL_REG_RDSAR_LO);
-        const std::uint32_t rdsar_hi = read_reg(slat_cr3_ptr, RTL_REG_RDSAR_HI);
-        state.rx_ring_gpa = (static_cast<std::uint64_t>(rdsar_hi) << 32) | rdsar_lo;
 
-        const std::uint32_t tnpds_lo = read_reg(slat_cr3_ptr, RTL_REG_TNPDS_LO);
-        const std::uint32_t tnpds_hi = read_reg(slat_cr3_ptr, RTL_REG_TNPDS_HI);
-        state.tx_ring_gpa = (static_cast<std::uint64_t>(tnpds_hi) << 32) | tnpds_lo;
-
-        if (state.rx_ring_gpa == 0 || state.tx_ring_gpa == 0) return 0;
-
-        const std::uint32_t stride = state.rtl_desc_stride;
-        if (stride == 0) return 0;
-
-        state.rx_count = 0;
-        for (std::uint32_t i = 0; i < RTL_MAX_RING_SCAN; i++)
-        {
-            const std::uint64_t desc_gpa = state.rx_ring_gpa + i * stride;
-            const auto* desc = static_cast<const rtl_rx_desc_t*>(
-                memory_manager::map_guest_physical(slat, desc_gpa));
-            if (!desc) break;
-
-            if (desc->opts1 & RTL_DESC_EOR)
-            {
-                state.rx_count = i + 1;
-                break;
-            }
-        }
-
-        state.tx_count = 0;
-        for (std::uint32_t i = 0; i < RTL_MAX_RING_SCAN; i++)
-        {
-            const std::uint64_t desc_gpa = state.tx_ring_gpa + i * stride;
-            const auto* desc = static_cast<const rtl_tx_desc_t*>(
-                memory_manager::map_guest_physical(slat, desc_gpa));
-            if (!desc) break;
-
-            if (desc->opts1 & RTL_DESC_EOR)
-            {
-                state.tx_count = i + 1;
-                break;
-            }
-        }
-
-        if (state.rx_count == 0 || state.tx_count == 0) return 0;
-
-        state.rx_ring_len = state.rx_count * stride;
-        state.tx_ring_len = state.tx_count * stride;
-
-        state.our_rx_index = 0;
-        state.our_tx_index = 0;
-    }
-    else
-    {
-        return 0;
-    }
-
-    read_mac(slat_cr3_ptr);
-    return 1;
+    return (state.rx_ring_gpa != 0) ? 1 : 0;
 }
-
-// ============================================================================
-// MAC Address Read
-// ============================================================================
 
 void nic::read_mac(const void* slat_cr3_ptr)
 {
@@ -378,17 +369,6 @@ void nic::read_mac(const void* slat_cr3_ptr)
         state.mac[3] = static_cast<std::uint8_t>(ral >> 24);
         state.mac[4] = static_cast<std::uint8_t>(rah);
         state.mac[5] = static_cast<std::uint8_t>(rah >> 8);
-    }
-    else if (state.nic_type == nic_type_t::REALTEK)
-    {
-        const std::uint32_t idr0 = read_reg(slat_cr3_ptr, RTL_REG_IDR0);
-        const std::uint32_t idr4 = read_reg(slat_cr3_ptr, RTL_REG_IDR4);
-        state.mac[0] = static_cast<std::uint8_t>(idr0);
-        state.mac[1] = static_cast<std::uint8_t>(idr0 >> 8);
-        state.mac[2] = static_cast<std::uint8_t>(idr0 >> 16);
-        state.mac[3] = static_cast<std::uint8_t>(idr0 >> 24);
-        state.mac[4] = static_cast<std::uint8_t>(idr4);
-        state.mac[5] = static_cast<std::uint8_t>(idr4 >> 8);
     }
 }
 
@@ -714,64 +694,75 @@ std::uint8_t nic::setup_igc_hv_tx_queue(const void* slat_cr3_ptr)
     if (!heap_va_pa_valid) return 0;
 
     // ========================================================================
-    // [핵심 0xFB fix] Single page 전략: descriptor ring + data buffer 를 같은 페이지에!
+    // [DPDK-style] 128 descriptors + 128 independent 2KB buffers
     // ========================================================================
-    // 문제: hidden page 2개 할당 시, desc page는 NIC DMA 가능하지만
-    //       data page는 NIC가 접근 못함 → GPTC=0, TX frame = all zeros
-    // 해결: 같은 물리 페이지에 desc ring과 data buffer를 모두 배치
-    //       NIC가 desc ring을 DMA read 가능 = 같은 페이지의 data도 DMA read 가능!
-    //
-    // 레이아웃 (4096 bytes):
-    //   offset 0x000-0x0FF: 16 descriptors × 16 bytes = 256 bytes
-    //   offset 0x100-0xFFF: data buffer = 3840 bytes (1 frame 충분, MTU=1500)
+    // desc ring: 128 × 16B = 2048B → 1 page (나머지 공간 미사용)
+    // data bufs: 128 × 2KB  = 256KB → 64 pages (연속 할당)
+    // 각 descriptor가 고유 buffer를 가리킴 → DD wait 없이 batch enqueue
     // ========================================================================
+    constexpr std::uint32_t DESC_COUNT = BATCH_TX_RING_SIZE;  // 128
 
-    void* page = heap_manager::allocate_page();
-    if (!page) return 0;
-
-    const std::uint64_t page_gpa = va_to_gpa(page);
-
-    // descriptor ring: 페이지 시작 (offset 0x000)
-    // data buffer: 페이지 offset 0x100
-    constexpr std::uint32_t DESC_COUNT = 16;     // 16 descriptors (256 bytes, 128B 배수)
-    constexpr std::uint32_t DATA_OFFSET = 0x100; // desc ring 바로 뒤
-    const std::uint64_t data_buf_gpa = page_gpa + DATA_OFFSET;
-    void* data_buf_va = static_cast<std::uint8_t*>(page) + DATA_OFFSET;
-
-    // 페이지 전체 클리어
-    crt::set_memory(page, 0, 0x1000);
-
-    // descriptor ring 초기화
-    auto* ring = static_cast<igc_tx_desc_t*>(page);
-    for (std::uint32_t i = 0; i < DESC_COUNT; i++)
+    if (!igc_hv_tx.desc_ring_va)
     {
-        ring[i].buffer_addr = data_buf_gpa; // 같은 페이지 내 data buffer!
-        ring[i].cmd_type_len = 0;
-        ring[i].olinfo_status = IGC_TXD_STAT_DD; // DD=1: 전송 가능
+        // Descriptor ring: 1 page
+        void* desc_page = heap_manager::allocate_page();
+        if (!desc_page) return 0;
+
+        igc_hv_tx.desc_ring_gpa = va_to_gpa(desc_page);
+        igc_hv_tx.desc_ring_va = desc_page;
+        igc_hv_tx.desc_count = DESC_COUNT;
+
+        // Per-slot data buffers: 각 2KB, 연속 페이지에서 2개씩
+        // 1 page (4KB) = 2 slots × 2KB
+        // 128 slots → 64 pages 필요
+        constexpr std::uint32_t SLOTS_PER_PAGE = 2;
+        constexpr std::uint32_t PAGES_NEEDED = DESC_COUNT / SLOTS_PER_PAGE;  // 64
+
+        for (std::uint32_t p = 0; p < PAGES_NEEDED; p++)
+        {
+            void* page = heap_manager::allocate_page();
+            if (!page) return 0;
+
+            std::uint64_t page_gpa = va_to_gpa(page);
+
+            // slot A = page + 0, slot B = page + 2048
+            std::uint32_t slot_a = p * SLOTS_PER_PAGE;
+            std::uint32_t slot_b = slot_a + 1;
+
+            igc_hv_tx.buf_va[slot_a] = static_cast<std::uint8_t*>(page);
+            igc_hv_tx.buf_gpa[slot_a] = page_gpa;
+            igc_hv_tx.buf_va[slot_b] = static_cast<std::uint8_t*>(page) + BATCH_TX_BUF_SIZE;
+            igc_hv_tx.buf_gpa[slot_b] = page_gpa + BATCH_TX_BUF_SIZE;
+        }
     }
 
-    // 상태 저장
-    igc_hv_tx.desc_ring_gpa = page_gpa;
-    igc_hv_tx.data_buf_gpa = data_buf_gpa;
-    igc_hv_tx.desc_ring_va = page;
-    igc_hv_tx.data_buf_va = data_buf_va;
-    igc_hv_tx.desc_count = DESC_COUNT;
-    igc_hv_tx.our_tdt = 0;
+    // Ring 초기화: 모든 descriptor DD=1 (사용 가능 표시)
+    crt::set_memory(igc_hv_tx.desc_ring_va, 0, 0x1000);
+    auto* ring = static_cast<igc_tx_desc_t*>(igc_hv_tx.desc_ring_va);
+    for (std::uint32_t i = 0; i < DESC_COUNT; i++)
+    {
+        ring[i].buffer_addr = igc_hv_tx.buf_gpa[i];
+        ring[i].cmd_type_len = 0;
+        ring[i].olinfo_status = IGC_TXD_STAT_DD;  // 초기: "완료됨" = 사용 가능
+    }
 
-    // ========================================================================
+    // SW pointers 초기화
+    igc_hv_tx.sw_tail = 0;
+    igc_hv_tx.sw_head = 0;
+    igc_hv_tx.nb_tx_free = DESC_COUNT - 1;  // ring-1 규칙
+
     // NIC TX Queue 1 레지스터 프로그래밍
-    // ========================================================================
-    write_reg(slat_cr3_ptr, IGC_TXQ1_TDBAL, static_cast<std::uint32_t>(page_gpa & 0xFFFFFFFF));
-    write_reg(slat_cr3_ptr, IGC_TXQ1_TDBAH, static_cast<std::uint32_t>(page_gpa >> 32));
-    write_reg(slat_cr3_ptr, IGC_TXQ1_TDLEN, DESC_COUNT * sizeof(igc_tx_desc_t)); // 256 bytes
+    const std::uint64_t desc_gpa = igc_hv_tx.desc_ring_gpa;
+    write_reg(slat_cr3_ptr, IGC_TXQ1_TDBAL, static_cast<std::uint32_t>(desc_gpa & 0xFFFFFFFF));
+    write_reg(slat_cr3_ptr, IGC_TXQ1_TDBAH, static_cast<std::uint32_t>(desc_gpa >> 32));
+    write_reg(slat_cr3_ptr, IGC_TXQ1_TDLEN, DESC_COUNT * sizeof(igc_tx_desc_t));
     write_reg(slat_cr3_ptr, IGC_TXQ1_TDH, 0);
     write_reg(slat_cr3_ptr, IGC_TXQ1_TDT, 0);
 
-    // Queue Enable (TXDCTL bit25) + WTHRESH=1 (즉시 write-back)
+    // Queue Enable + WTHRESH=1
     constexpr std::uint32_t TXDCTL_VAL = IGC_TXDCTL_ENABLE | (1u << 16);
     write_reg(slat_cr3_ptr, IGC_TXQ1_TXDCTL, TXDCTL_VAL);
 
-    // TXDCTL.ENABLE 활성화 대기
     std::uint32_t txdctl_final = 0;
     for (std::uint32_t i = 0; i < 1000; i++)
     {
@@ -787,53 +778,49 @@ std::uint8_t nic::setup_igc_hv_tx_queue(const void* slat_cr3_ptr)
 // ============================================================================
 // [FIX] TX ring 리셋 - OPEN 수신 시 호출
 // ============================================================================
-// 문제: 클라이언트 취소 → TX ring descriptors 소진 → DD 미클리어 → ring stuck
-// 해결: descriptor 재초기화 + TDH/TDT=0 리셋 → 즉시 전송 가능
 // ============================================================================
-// [FIX] TX ring 완전 리셋 - queue disable → descriptor 초기화 → queue re-enable
-// 문제: TDH는 read-only! write_reg(TDH, 0)은 무시됨
-// 해결: TXDCTL.ENABLE=0으로 queue 끄면 HW가 TDH=0으로 리셋
+// ============================================================================
+// [v4 stable] TX ring 리셋 — 단순 TXDCTL toggle + desc reinit
+// ============================================================================
+// TDBAL 안 건드림 → OS igc driver와 충돌 없음 (v4 검증)
+// TDBAL=0 복구? → setup_igc_hv_tx_queue 재호출로 처리 (OPEN 시)
 // ============================================================================
 void nic::reset_tx_ring(const void* slat_cr3_ptr)
 {
     if (!igc_hv_tx.initialized) return;
 
-    // 1. TX queue 비활성화 (TXDCTL.ENABLE = 0)
+    // 1. TX queue 비활성화
     write_reg(slat_cr3_ptr, IGC_TXQ1_TXDCTL, 0);
-
-    // 2. queue 비활성화 대기 (HW가 TDH=0으로 리셋)
     for (int i = 0; i < 1000; i++) {
-        std::uint32_t val = read_reg(slat_cr3_ptr, IGC_TXQ1_TXDCTL);
-        if (!(val & IGC_TXDCTL_ENABLE)) break;
+        if (!(read_reg(slat_cr3_ptr, IGC_TXQ1_TXDCTL) & IGC_TXDCTL_ENABLE)) break;
         _mm_pause();
     }
 
-    // 3. descriptor ring 재초기화 (DD=1 = 사용 가능)
+    // 2. Descriptor ring 재초기화 (batch TX: 각 slot 고유 buffer)
     auto* ring = static_cast<igc_tx_desc_t*>(igc_hv_tx.desc_ring_va);
     for (std::uint32_t i = 0; i < igc_hv_tx.desc_count; i++)
     {
-        ring[i].buffer_addr = igc_hv_tx.data_buf_gpa;
+        ring[i].buffer_addr = igc_hv_tx.buf_gpa[i];
         ring[i].cmd_type_len = 0;
         ring[i].olinfo_status = IGC_TXD_STAT_DD;
     }
 
-    // 4. cache flush
+    // 3. Cache flush
     for (std::uint32_t cl = 0; cl < igc_hv_tx.desc_count * 16; cl += 64)
         _mm_clflush(reinterpret_cast<std::uint8_t*>(ring) + cl);
     _mm_sfence();
 
-    // 5. TDT = 0 (TDH는 queue disable 시 HW가 이미 0으로 리셋)
-    write_reg(slat_cr3_ptr, IGC_TXQ1_TDT, 0);
-    igc_hv_tx.our_tdt = 0;
+    // 4. SW pointers 리셋
+    igc_hv_tx.sw_tail = 0;
+    igc_hv_tx.sw_head = 0;
+    igc_hv_tx.nb_tx_free = igc_hv_tx.desc_count - 1;
 
-    // 6. TX queue 재활성화 (TXDCTL.ENABLE=1 + WTHRESH=1)
+    // 5. TDT = 0 + TX queue 재활성화
+    write_reg(slat_cr3_ptr, IGC_TXQ1_TDT, 0);
     constexpr std::uint32_t TXDCTL_VAL = IGC_TXDCTL_ENABLE | (1u << 16);
     write_reg(slat_cr3_ptr, IGC_TXQ1_TXDCTL, TXDCTL_VAL);
-
-    // 7. 활성화 대기
     for (int i = 0; i < 1000; i++) {
-        std::uint32_t val = read_reg(slat_cr3_ptr, IGC_TXQ1_TXDCTL);
-        if (val & IGC_TXDCTL_ENABLE) break;
+        if (read_reg(slat_cr3_ptr, IGC_TXQ1_TXDCTL) & IGC_TXDCTL_ENABLE) break;
         _mm_pause();
     }
 }
@@ -919,11 +906,129 @@ static std::uint8_t inject_tx_frame_intel_igc_q0_fallback(
 //   ⚠️ 물리 와이어에 패킷 나감: 불가피 (네트워크 통신 본질)
 // ============================================================================
 
+// ============================================================================
+// [DPDK-style] Batch TX — 3단계: cleanup → enqueue → commit
+// ============================================================================
+// 기존: inject_tx_frame() 1개씩 + DD wait = 90 × 9μs = 810μs
+// 변경: enqueue N개 → commit 1번 = memcpy N회 + MMIO 1회 ≈ 10μs
+//
+// tx_cleanup(): DD 완료된 descriptor slot 회수 → nb_tx_free 증가
+// tx_enqueue(): frame을 ring slot에 복사, descriptor 설정 (TDT 안 건드림)
+// tx_commit():  TDT MMIO write 1번 → NIC에 batch 전달
+// ============================================================================
+
+// ----------------------------------------------------------------------------
+// tx_cleanup: 완료된 descriptor 회수
+// ----------------------------------------------------------------------------
+// sw_head부터 순회하며 DD=1인 descriptor의 slot을 free로 되돌림
+// RS bit이 매 desc에 설정되므로 개별 DD 확인 가능
+// ----------------------------------------------------------------------------
+static std::uint32_t tx_cleanup()
+{
+    auto* ring = static_cast<nic::igc_tx_desc_t*>(nic::igc_hv_tx.desc_ring_va);
+    const std::uint32_t count = nic::igc_hv_tx.desc_count;
+    std::uint32_t head = nic::igc_hv_tx.sw_head;
+    std::uint32_t tail = nic::igc_hv_tx.sw_tail;
+    std::uint32_t reclaimed = 0;
+
+    // head == tail → ring 비어있음 (회수할 것 없음)
+    while (head != tail)
+    {
+        volatile std::uint32_t* status_ptr =
+            reinterpret_cast<volatile std::uint32_t*>(&ring[head].olinfo_status);
+        if (!(*status_ptr & nic::IGC_TXD_STAT_DD))
+            break;  // 아직 NIC 미완료 → 여기서 멈춤
+
+        reclaimed++;
+        head = (head + 1) % count;
+    }
+
+    if (reclaimed > 0)
+    {
+        nic::igc_hv_tx.sw_head = head;
+        nic::igc_hv_tx.nb_tx_free += reclaimed;
+        nic::igc_hv_tx.dbg_cleanup_reclaimed += reclaimed;
+    }
+    return reclaimed;
+}
+
+// ----------------------------------------------------------------------------
+// tx_enqueue: frame 1개를 ring slot에 적재 (TDT 변경 없음!)
+// ----------------------------------------------------------------------------
+// 리턴: 1=성공, 0=ring full
+// NIC는 아직 이 frame을 모름 (TDT 안 움직임)
+// ----------------------------------------------------------------------------
+static std::uint8_t tx_enqueue(
+    const std::uint8_t* raw_frame,
+    const std::uint32_t frame_len)
+{
+    if (nic::igc_hv_tx.nb_tx_free == 0) {
+        // ring full → cleanup 시도
+        tx_cleanup();
+        if (nic::igc_hv_tx.nb_tx_free == 0) {
+            nic::igc_hv_tx.dbg_ring_full_count++;
+            return 0;  // 진짜 full
+        }
+    }
+
+    const std::uint32_t slot = nic::igc_hv_tx.sw_tail;
+    const std::uint32_t count = nic::igc_hv_tx.desc_count;
+
+    // Frame → slot buffer 복사
+    auto* buf = static_cast<std::uint8_t*>(nic::igc_hv_tx.buf_va[slot]);
+    crt::copy_memory(buf, raw_frame, frame_len);
+
+    // Cache flush: buffer data
+    for (std::uint32_t cl = 0; cl < frame_len; cl += 64)
+        _mm_clflush(buf + cl);
+
+    // Descriptor 설정
+    auto* ring = static_cast<nic::igc_tx_desc_t*>(nic::igc_hv_tx.desc_ring_va);
+    auto& desc = ring[slot];
+    desc.buffer_addr = nic::igc_hv_tx.buf_gpa[slot];
+    desc.olinfo_status = static_cast<std::uint32_t>(frame_len) << nic::IGC_TXD_PAYLEN_SHIFT;
+    desc.cmd_type_len = nic::IGC_TXD_DTYP_DATA
+        | nic::IGC_TXD_CMD_DEXT
+        | nic::IGC_TXD_CMD_EOP
+        | nic::IGC_TXD_CMD_IFCS
+        | nic::IGC_TXD_CMD_RS       // 매 desc RS → 개별 DD writeback
+        | (frame_len & 0xFFFF);
+
+    // Cache flush: descriptor
+    _mm_clflush(&desc);
+
+    // SW tail 전진
+    nic::igc_hv_tx.sw_tail = (slot + 1) % count;
+    nic::igc_hv_tx.nb_tx_free--;
+    nic::igc_hv_tx.dbg_enqueue_count++;
+
+    return 1;
+}
+
+// ----------------------------------------------------------------------------
+// tx_commit: TDT MMIO write → NIC에 batch 전달
+// ----------------------------------------------------------------------------
+// enqueue한 모든 frame을 한 번에 NIC에 알림
+// 이 함수가 호출되기 전까지 NIC는 새 frame을 모름
+// ----------------------------------------------------------------------------
+static void tx_commit()
+{
+    _mm_sfence();  // 모든 store 완료 보장
+    const cr3 slat = cached_slat_cr3;
+    nic::write_reg(&slat, nic::IGC_TXQ1_TDT, nic::igc_hv_tx.sw_tail);
+    nic::igc_hv_tx.dbg_commit_count++;
+}
+
+// ============================================================================
+// [호환성] inject_tx_frame_intel_igc — batch TX wrapper
+// ============================================================================
+// 기존 코드 호환: 단일 frame inject → enqueue + commit
+// flush_deferred_tx에서는 직접 enqueue/commit 사용
+// ============================================================================
 static std::uint8_t inject_tx_frame_intel_igc(
     const std::uint8_t* raw_frame,
     const std::uint32_t frame_len)
 {
-    // [카운터] 메모리 접근만 (MMIO 아님) → 오버헤드 무시
     network::dbg_inject_total++;
     network::dbg_inject_last_len = frame_len;
 
@@ -931,174 +1036,24 @@ static std::uint8_t inject_tx_frame_intel_igc(
         return inject_tx_frame_intel_igc_q0_fallback(raw_frame, frame_len);
     }
 
-    const cr3 slat = cached_slat_cr3;
-    const std::uint32_t tx_count = nic::igc_hv_tx.desc_count;
-
-    // [필수] Ring full 체크 - TDH MMIO read 1회 (유일한 MMIO)
-    const std::uint32_t tdt = nic::igc_hv_tx.our_tdt;
-    std::uint32_t tdh = nic::read_reg(&slat, nic::IGC_TXQ1_TDH);
-    const std::uint32_t next_tdt = (tdt + 1) % tx_count;
-
-    if (next_tdt == tdh) {
-        constexpr std::uint32_t MAX_DRAIN_POLLS = 2000;
-        for (std::uint32_t spin = 0; spin < MAX_DRAIN_POLLS; spin++) {
-            _mm_pause();
-            tdh = nic::read_reg(&slat, nic::IGC_TXQ1_TDH);
-            if (next_tdt != tdh) break;
-        }
-        if (next_tdt == tdh) {
-            network::packets_dropped++;
-            return 0;
-        }
-    }
-
-    // [필수] Descriptor DD 확인
-    auto* ring = static_cast<nic::igc_tx_desc_t*>(nic::igc_hv_tx.desc_ring_va);
-    auto& desc = ring[tdt];
-
-    const volatile std::uint32_t prev_status =
-        *reinterpret_cast<volatile std::uint32_t*>(&desc.olinfo_status);
-    const volatile std::uint32_t prev_cmd =
-        *reinterpret_cast<volatile std::uint32_t*>(&desc.cmd_type_len);
-    if (!(prev_status & nic::IGC_TXD_STAT_DD) && prev_cmd != 0) {
+    if (!tx_enqueue(raw_frame, frame_len)) {
         network::packets_dropped++;
+        nic::igc_hv_tx.consecutive_fail++;
+        if (nic::igc_hv_tx.consecutive_fail > network::dbg_txq1_consec_max)
+            network::dbg_txq1_consec_max = nic::igc_hv_tx.consecutive_fail;
+
+        if (nic::igc_hv_tx.consecutive_fail >= 10) {
+            const cr3 slat = cached_slat_cr3;
+            nic::reset_tx_ring(&slat);
+            network::dbg_txq1_re_enable++;
+            nic::igc_hv_tx.consecutive_fail = 0;
+        }
         return 0;
     }
 
-    // [필수] 프레임 복사 → data buffer
-    // [제거됨: readback test, write test, header capture, canary, diag_eth/ip/udp]
-    auto* buf = static_cast<std::uint8_t*>(nic::igc_hv_tx.data_buf_va);
-    crt::copy_memory(buf, raw_frame, frame_len);
-
-    // [필수] Descriptor 설정 (Advanced TX Descriptor)
-    desc.buffer_addr = nic::igc_hv_tx.data_buf_gpa;
-    desc.cmd_type_len = nic::IGC_TXD_DTYP_DATA
-        | nic::IGC_TXD_CMD_DEXT
-        | nic::IGC_TXD_CMD_EOP
-        | nic::IGC_TXD_CMD_IFCS
-        | nic::IGC_TXD_CMD_RS
-        | (frame_len & 0xFFFF);
-    desc.olinfo_status = static_cast<std::uint32_t>(frame_len) << nic::IGC_TXD_PAYLEN_SHIFT;
-
-    // [필수] Cache flush → DRAM (NIC DMA가 읽을 수 있도록)
-    for (std::uint32_t cl = 0; cl < frame_len; cl += 64)
-        _mm_clflush(buf + cl);
-    _mm_clflush(&desc);
-    _mm_sfence();
-
-    // [필수] TDT write → NIC TX 시작 (Q1 전용)
-    nic::write_reg(&slat, nic::IGC_TXQ1_TDT, next_tdt);
-    nic::igc_hv_tx.our_tdt = next_tdt;
-
-    // [필수] DD-wait: shared data buffer → 전송 완료 전 다음 frame 쓰면 오염!
-    // 1500B @ 1Gbps = ~12µs wire time
-    // [제거됨: TDH read, GPTC/TPT/GOTCL/GOTCH stat reads → 5 MMIO 절약]
-    constexpr std::uint32_t MAX_TX_WAIT = 500000;
-    volatile std::uint32_t* status_ptr =
-        reinterpret_cast<volatile std::uint32_t*>(&desc.olinfo_status);
-    for (std::uint32_t i = 0; i < MAX_TX_WAIT; i++) {
-        if (*status_ptr & nic::IGC_TXD_STAT_DD) {
-            network::dbg_inject_success++;
-            return 1;
-        }
-        _mm_pause();
-    }
-
-    // DD timeout
-    network::dbg_inject_fail++;
-    network::packets_dropped++;
-    return 0;
-}
-
-// ============================================================================
-// TX Frame Injection - Realtek
-// ============================================================================
-
-static std::uint8_t inject_tx_frame_realtek(
-    const std::uint8_t* raw_frame,
-    const std::uint32_t frame_len)
-{
-    const cr3 slat = cached_slat_cr3;
-    const std::uint32_t tx_count = nic::state.tx_count;
-    if (tx_count == 0) return 0;
-
-    std::uint32_t idx = nic::state.our_tx_index;
-
-    std::uint32_t scanned = 0;
-    const nic::rtl_tx_desc_t* found_desc = nullptr;
-    std::uint64_t found_gpa = 0;
-    const std::uint32_t stride = nic::state.rtl_desc_stride;
-
-    while (scanned < tx_count)
-    {
-        const std::uint64_t desc_gpa = nic::state.tx_ring_gpa + idx * stride;
-        const auto* desc = static_cast<const nic::rtl_tx_desc_t*>(
-            memory_manager::map_guest_physical(slat, desc_gpa));
-        if (!desc) return 0;
-
-        if (!(desc->opts1 & nic::RTL_DESC_OWN))
-        {
-            found_desc = desc;
-            found_gpa = desc_gpa;
-            break;
-        }
-
-        if (desc->opts1 & nic::RTL_DESC_EOR)
-            idx = 0;
-        else
-            idx = (idx + 1) % tx_count;
-
-        scanned++;
-    }
-
-    if (!found_desc) {
-        network::packets_dropped++;
-        return 0;
-    }
-
-    const std::uint64_t buf_gpa =
-        static_cast<std::uint64_t>(found_desc->addr_hi) << 32 | found_desc->addr_lo;
-    if (buf_gpa == 0) {
-        network::packets_dropped++;
-        return 0;
-    }
-
-    auto* buf = static_cast<std::uint8_t*>(
-        memory_manager::map_guest_physical(slat, buf_gpa));
-    if (!buf) return 0;
-
-    crt::copy_memory(buf, raw_frame, frame_len);
-
-    auto* desc_w = static_cast<nic::rtl_tx_desc_t*>(
-        memory_manager::map_guest_physical(slat, found_gpa));
-    if (!desc_w) return 0;
-
-    std::uint32_t new_opts1 = nic::RTL_DESC_OWN | nic::RTL_DESC_FS | nic::RTL_DESC_LS
-        | (frame_len & nic::RTL_TX_LEN_MASK);
-    if (found_desc->opts1 & nic::RTL_DESC_EOR)
-        new_opts1 |= nic::RTL_DESC_EOR;
-
-    desc_w->opts2 = 0;
-
-    _mm_sfence();
-    desc_w->opts1 = new_opts1;
-    _mm_sfence();
-
-    nic::write_reg8(&slat, nic::RTL_REG_TPPOLL, nic::RTL_TPPOLL_NPQ);
-
-    constexpr std::uint32_t MAX_TX_WAIT = 10000;
-    for (std::uint32_t i = 0; i < MAX_TX_WAIT; i++) {
-        const auto* check = static_cast<const volatile nic::rtl_tx_desc_t*>(
-            memory_manager::map_guest_physical(slat, found_gpa));
-        if (check && !(check->opts1 & nic::RTL_DESC_OWN)) break;
-    }
-
-    if (found_desc->opts1 & nic::RTL_DESC_EOR)
-        nic::state.our_tx_index = 0;
-    else
-        nic::state.our_tx_index = (idx + 1) % tx_count;
-
-    // [핵심] TX stats 클리어 제거 - 레지스터 변조 감지 벡터였음
+    tx_commit();
+    network::dbg_inject_success++;
+    nic::igc_hv_tx.consecutive_fail = 0;
     return 1;
 }
 
@@ -1118,24 +1073,25 @@ static std::uint8_t inject_tx_frame(
         else
             return inject_tx_frame_intel_legacy(raw_frame, frame_len);
     }
-    else if (nic::state.nic_type == nic::nic_type_t::REALTEK)
-        return inject_tx_frame_realtek(raw_frame, frame_len);
     return 0;
 }
 
 // ============================================================================
-// [핵심] Deferred TX Flush - VMEXIT당 MAX_CHUNKS_PER_EXIT개 chunk만 전송
+// [DPDK-style] Deferred TX Flush — batch enqueue + single commit
 // ============================================================================
-// 호출: process_pending() 진입 직후 (RX poll 전)
-// 동작: response_buffer의 데이터를 chunk 단위로 나눠 inject
-// 리턴: 이번 호출에서 전송한 chunk 수
+// 기존: chunk마다 inject_tx_frame() → 90 DD waits + 90 MMIO = ~810μs
+// 변경: chunk마다 tx_enqueue() → 1 tx_commit() = memcpy 90회 + MMIO 1회
+//
+// Ring full 대응:
+//   127 slots (ring-1) < 필요 chunks → 중간에 commit+cleanup 반복
+//   일반 ReadScatter(4KB) = ~3 chunks → 여유
+//   대량 읽기(128KB) = ~90 chunks → ring 127로 1회 커버
 // ============================================================================
 static std::uint32_t flush_deferred_tx()
 {
     if (!deferred_tx.active) return 0;
 
     // [핵심] stale timeout: 클라이언트 사망 대비
-    // 100ms 이상 경과한 deferred TX는 폐기
     const std::uint64_t elapsed = read_tsc() - deferred_tx.start_tsc;
     if (elapsed > DEFERRED_TX_TIMEOUT_TSC) {
         deferred_tx.active = 0;
@@ -1154,9 +1110,40 @@ static std::uint32_t flush_deferred_tx()
 
     std::uint32_t chunks_this_exit = 0;
     std::uint32_t ci = deferred_tx.next_chunk;
+    std::uint32_t enqueued_since_commit = 0;
+
+    // [batch TX] 진입 시 cleanup: 이전 batch에서 완료된 slot 회수
+    if (nic::igc_hv_tx.initialized) {
+        tx_cleanup();
+    }
 
     while (ci < total_chunks && chunks_this_exit < MAX_CHUNKS_PER_EXIT)
     {
+        // [batch TX] ring full → 중간 commit + cleanup
+        if (nic::igc_hv_tx.initialized && nic::igc_hv_tx.nb_tx_free == 0) {
+            if (enqueued_since_commit > 0) {
+                tx_commit();
+                enqueued_since_commit = 0;
+            }
+            // DD 완료 대기: 최대 25000 pause (~500μs)
+            for (std::uint32_t w = 0; w < 25000; w++) {
+                tx_cleanup();
+                if (nic::igc_hv_tx.nb_tx_free > 0) break;
+                _mm_pause();
+            }
+            if (nic::igc_hv_tx.nb_tx_free == 0) {
+                // 진짜 stuck → recovery
+                nic::igc_hv_tx.consecutive_fail++;
+                if (nic::igc_hv_tx.consecutive_fail >= 10) {
+                    const cr3 slat = cached_slat_cr3;
+                    nic::reset_tx_ring(&slat);
+                    network::dbg_txq1_re_enable++;
+                    nic::igc_hv_tx.consecutive_fail = 0;
+                }
+                break;  // 이번 exit에서 중단
+            }
+        }
+
         // 이 chunk의 데이터 오프셋/크기
         std::uint32_t data_offset = ci * CHUNK_DATA_MAX;
         std::uint32_t remaining = (data_offset < payload_size) ? (payload_size - data_offset) : 0;
@@ -1171,13 +1158,12 @@ static std::uint32_t flush_deferred_tx()
         // chunk header
         auto* chdr16 = reinterpret_cast<std::uint16_t*>(
             tx_frame_buffer + ETH_HDR_SIZE + IP_HDR_SIZE + 8);
-        chdr16[0] = static_cast<std::uint16_t>(ci);            // chunk_index
-        chdr16[1] = static_cast<std::uint16_t>(total_chunks);  // chunk_total
+        chdr16[0] = static_cast<std::uint16_t>(ci);
+        chdr16[1] = static_cast<std::uint16_t>(total_chunks);
         auto* chdr32 = reinterpret_cast<std::uint32_t*>(chdr16 + 2);
-        chdr32[0] = payload_size;                                // total_size
-        chdr32[1] = cur_seq;                                     // response_seq
+        chdr32[0] = payload_size;
+        chdr32[1] = cur_seq;
 
-        // 데이터 복사
         if (chunk_data > 0) {
             crt::copy_memory(
                 tx_frame_buffer + ETH_HDR_SIZE + IP_HDR_SIZE + 8 + CHUNK_HDR_SIZE,
@@ -1191,7 +1177,7 @@ static std::uint32_t flush_deferred_tx()
         }
         eth->ethertype = packet::ETHERTYPE_IPV4;
 
-        // IP header (DF=1)
+        // IP header
         ip->ver_ihl = 0x45;
         ip->tos = 0;
         ip->total_length = packet::htons(
@@ -1211,17 +1197,41 @@ static std::uint32_t flush_deferred_tx()
         udp->length = packet::htons(static_cast<std::uint16_t>(8 + udp_payload_size));
         udp->checksum = 0;
 
-        // inject
-        std::uint32_t frame_size = ETH_HDR_SIZE + IP_HDR_SIZE + 8 + udp_payload_size;
-        std::uint8_t ok = inject_tx_frame(tx_frame_buffer, frame_size);
-        if (!ok) {
-            for (int w = 0; w < 1000; w++) _mm_pause();
-            ok = inject_tx_frame(tx_frame_buffer, frame_size);
+        // TX snap (디버그)
+        {
+            for (int si = 0; si < 16; si++)
+                network::dbg_tx_snap[si] = reinterpret_cast<const std::uint32_t*>(tx_frame_buffer)[si];
+            const volatile std::uint16_t v_our = our_src_port;
+            const volatile std::uint16_t v_atk = attack_src_port;
+            network::dbg_tx_snap_ports = (static_cast<std::uint32_t>(v_our) << 16)
+                | static_cast<std::uint32_t>(v_atk);
         }
-        if (ok) deferred_tx.chunks_sent_ok++;
+
+        std::uint32_t frame_size = ETH_HDR_SIZE + IP_HDR_SIZE + 8 + udp_payload_size;
+
+        // [DPDK-style] enqueue만 (commit은 루프 밖에서 1번)
+        if (nic::igc_hv_tx.initialized) {
+            std::uint8_t ok = tx_enqueue(
+                tx_frame_buffer, frame_size);
+            if (ok) {
+                deferred_tx.chunks_sent_ok++;
+                enqueued_since_commit++;
+            }
+        }
+        else {
+            // fallback: legacy inject (Q0)
+            std::uint8_t ok = inject_tx_frame(tx_frame_buffer, frame_size);
+            if (ok) deferred_tx.chunks_sent_ok++;
+        }
 
         ci++;
         chunks_this_exit++;
+    }
+
+    // [DPDK-style] 루프 완료 후 단 1번 commit → NIC에 batch 전달
+    if (enqueued_since_commit > 0) {
+        tx_commit();
+        nic::igc_hv_tx.consecutive_fail = 0;
     }
 
     deferred_tx.next_chunk = ci;
@@ -1230,9 +1240,6 @@ static std::uint32_t flush_deferred_tx()
     if (ci >= total_chunks) {
         deferred_tx.active = 0;
     }
-
-    // [확인됨] stat clear 불필요 - 테스트로 stat 누적이 NIC 사망 원인 아님 확인
-    // read-on-clear 레지스터(GPTC/TPT/GOTCL/GOTCH) 읽지 않아도 HV 정상 동작
 
     return chunks_this_exit;
 }
@@ -1260,12 +1267,10 @@ std::uint8_t network::send_response(
         return 0;
     }
 
-    // [핵심] 이전 deferred TX가 아직 진행중이면 flush (드문 경우)
     while (deferred_tx.active) {
         flush_deferred_tx();
     }
 
-    // Deferred TX 설정
     constexpr std::uint32_t CHUNK_DATA_MAX = 1460;
     std::uint32_t chunk_total = (size + CHUNK_DATA_MAX - 1) / CHUNK_DATA_MAX;
     if (chunk_total == 0) chunk_total = 1;
@@ -1278,12 +1283,8 @@ std::uint8_t network::send_response(
     deferred_tx.start_tsc = read_tsc();
     deferred_tx.active = 1;
 
-    // [핵심] 첫 번째 배치 즉시 전송 (같은 VMEXIT에서 시작)
-    // chunk0가 빨리 도착해야 LeechCore가 Phase 1 완료
     flush_deferred_tx();
 
-    // dma_response == response_buffer 이므로 데이터는 이미 보존됨
-    // 나머지는 다음 VMEXIT들에서 flush_deferred_tx()가 처리
     network::dbg_frag_last_count = chunk_total;
     packets_sent++;
     return 1;
@@ -1329,32 +1330,16 @@ static void process_complete_dma_payload(
     const auto magic = *reinterpret_cast<const std::uint32_t*>(dma_payload);
     if (magic != 0x48564430) { network::dbg_dma_fail_reason = 2; return; }
 
-    // [핵심] 헤더 필드 캡처 (magic 통과 후)
     const auto* hdr = reinterpret_cast<const dma::msg_hdr_t*>(dma_payload);
     network::dbg_dma_last_version = hdr->version;
     network::dbg_dma_last_type = static_cast<std::uint32_t>(hdr->type);
     network::dbg_dma_last_cbmsg = hdr->cb_msg;
 
-    // ====================================================================
-    // [핵심] OPEN 요청 시 TX Q1 재초기화
-    // ====================================================================
-    // 문제: 여러 번 연속 실행 → ~90,000 TX descriptor wraps → 누적 오염 → 사망
-    // 해결: 새 세션 시작(OPEN)마다 TX ring 깨끗하게 리셋
-    //       + 이전 세션의 남은 deferred TX 취소
-    // ====================================================================
-    // ====================================================================
-    // [핵심] OPEN 시 이전 세션 잔여 TX만 취소
-    // ====================================================================
-    // soft reset (TDT=TDH 동기화)도 제거 — 21/21 성공 당시엔 이 코드 없었음
-    // descriptor ring은 inject가 항상 DD-wait 하므로 자체 정합성 유지됨
-    // ====================================================================
     if (hdr->type == dma::msg_type_t::open_req) {
         deferred_tx.active = 0;
     }
 
-    // version 체크 (dma::process 내부와 동일)
     if (hdr->version != 0x0001) { network::dbg_dma_fail_reason = 3; }
-    // cb_msg 체크
     else if (hdr->cb_msg > dma_size) { network::dbg_dma_fail_reason = 4; }
 
     const std::uint32_t rsp_size = dma::process(
@@ -1364,12 +1349,10 @@ static void process_complete_dma_payload(
     network::dbg_dma_rsp_size = rsp_size;
     if (rsp_size > 0) {
         network::dbg_dma_rsp_nonzero++;
-        // [핵심] 실패사유 0 = 성공
         network::dbg_dma_fail_reason = 0;
         network::send_response(response_buffer, rsp_size);
     }
     else if (network::dbg_dma_fail_reason < 3) {
-        // magic/version/cbmsg 통과했는데 process가 0 → unknown type
         network::dbg_dma_fail_reason = 5;
     }
     network::packets_received++;
@@ -1385,6 +1368,17 @@ static std::uint8_t process_rx_packet(
 {
     network::dbg_rx_call_count++;
     network::dbg_last_pkt_len = static_cast<std::uint16_t>(pkt_len);
+
+    // [DIAG] 수신 패킷 첫 64바이트 hex dump (dbg_hex[] 재활용)
+    // 이전에는 TX first fragment 용이었는데, RX 디버그가 더 급함
+    {
+        const std::uint32_t dump_len = (pkt_len < 64) ? pkt_len : 64;
+        for (std::uint32_t i = 0; i < dump_len / 4; i++)
+            network::dbg_hex[i] = *reinterpret_cast<const std::uint32_t*>(pkt_data + i * 4);
+        // 나머지 0으로
+        for (std::uint32_t i = dump_len / 4; i < 16; i++)
+            network::dbg_hex[i] = 0;
+    }
 
     if (pkt_len < 34 || pkt_len > 1514) return 0;
 
@@ -1847,64 +1841,13 @@ static std::uint8_t poll_rx_ring_intel_igc_fallback()
 
 // ============================================================================
 // RX Ring Polling - Realtek
+// [핵심] Buffer Address Pre-Cache 전략:
+// 문제: 다른 vCPU에서 드라이버가 descriptor를 즉시 재활용 → addr=0 race
+// 해결: 초기화 시 모든 descriptor의 buffer address를 캐시
+//       폴링 때는 opts1만 읽음 (4바이트 = x86 자연 atomic)
+//       캐시된 addr로 패킷 데이터 접근
 // ============================================================================
 
-static std::uint8_t poll_rx_ring_realtek()
-{
-    const cr3 slat = cached_slat_cr3;
-    std::uint8_t processed = 0;
-    const std::uint32_t rx_count = nic::state.rx_count;
-    if (rx_count == 0) return 0;
-
-    std::uint32_t idx = nic::state.our_rx_index;
-    std::uint32_t checked = 0;
-    constexpr std::uint32_t MAX_PACKETS_PER_POLL = 32;
-    const std::uint32_t stride = nic::state.rtl_desc_stride;
-
-    while (checked < MAX_PACKETS_PER_POLL)
-    {
-        const std::uint64_t desc_gpa = nic::state.rx_ring_gpa + idx * stride;
-        const auto* desc = static_cast<const nic::rtl_rx_desc_t*>(
-            memory_manager::map_guest_physical(slat, desc_gpa));
-        if (!desc) break;
-
-        if (desc->opts1 & nic::RTL_DESC_OWN) break;
-
-        if ((desc->opts1 & nic::RTL_DESC_FS) && (desc->opts1 & nic::RTL_DESC_LS))
-        {
-            const std::uint32_t pkt_len = desc->opts1 & nic::RTL_RX_LEN_MASK;
-            const std::uint64_t buf_gpa =
-                static_cast<std::uint64_t>(desc->addr_hi) << 32 | desc->addr_lo;
-
-            if (buf_gpa != 0 && pkt_len > 0)
-            {
-                const auto* pkt_data = static_cast<const std::uint8_t*>(
-                    memory_manager::map_guest_physical(slat, buf_gpa));
-
-                if (pkt_data)
-                {
-                    // [핵심] Guest 메모리 로컬 복사 (race condition 방지)
-                    static std::uint8_t rx_local_buf_rtl[1514];
-                    const std::uint32_t copy_len = (pkt_len <= 1514) ? pkt_len : 1514;
-                    crt::copy_memory(rx_local_buf_rtl, pkt_data, copy_len);
-                    processed |= process_rx_packet(rx_local_buf_rtl, copy_len);
-                }
-            }
-        }
-
-        const std::uint8_t is_eor = (desc->opts1 & nic::RTL_DESC_EOR) ? 1 : 0;
-        if (is_eor)
-            idx = 0;
-        else
-            idx = (idx + 1) % rx_count;
-
-        checked++;
-    }
-
-    nic::state.our_rx_index = idx;
-    ip_frag::reasm_tick();
-    return processed;
-}
 
 // ============================================================================
 // RX Ring Polling - Dispatcher
@@ -1924,8 +1867,6 @@ static std::uint8_t poll_rx_ring()
         else
             return poll_rx_ring_intel_legacy();
     }
-    else if (nic::state.nic_type == nic::nic_type_t::REALTEK)
-        return poll_rx_ring_realtek();
     return 0;
 }
 
@@ -1937,8 +1878,6 @@ void network::set_up()
 {
     cached_slat_cr3 = slat::hyperv_cr3();
 
-    // [핵심] CHUNK_SIZE=256: 응답 ~1MB (16+8+256×16+256×4096 = 1,052,696B ≈ 257 pages)
-    // 512 pages 시도 → 2MB 여유. heap_manager 초기 연속 할당이므로 대부분 성공
     constexpr std::uint32_t RESPONSE_PAGES = 512;
     response_buffer = static_cast<std::uint8_t*>(heap_manager::allocate_page());
     response_buffer_size = 0x1000;
@@ -1988,6 +1927,87 @@ void network::set_up()
     if (!nic::read_ring_config(&cached_slat_cr3)) {
         is_initialized = 0;
         return;
+    }
+
+    // [핵심] MSI-X/MSI capability 탐색 — CF8 PCI config space
+    {
+        const std::uint8_t bus = nic::state.bus;
+        const std::uint8_t dev = nic::state.dev;
+        const std::uint8_t func = nic::state.func;
+
+        // Status register bit4 = Capability List
+        std::uint16_t status = nic::pci_cf8_read16(bus, dev, func, 0x06);
+        if (status & 0x10)
+        {
+            std::uint8_t cap_ptr = static_cast<std::uint8_t>(
+                nic::pci_cf8_read16(bus, dev, func, 0x34) & 0xFF);
+            for (int safety = 0; safety < 48 && cap_ptr >= 0x40; safety++)
+            {
+                std::uint16_t cap_hdr = nic::pci_cf8_read16(bus, dev, func, cap_ptr);
+                std::uint8_t cap_id = static_cast<std::uint8_t>(cap_hdr & 0xFF);
+                std::uint8_t next = static_cast<std::uint8_t>((cap_hdr >> 8) & 0xFF);
+
+                if (cap_id == nic::PCI_CAP_MSIX)
+                {
+                    nic::msix_cap_offset = cap_ptr;
+                    nic::msix_orig_msgctl = nic::pci_cf8_read16(bus, dev, func, cap_ptr + 2);
+                }
+                else if (cap_id == nic::PCI_CAP_MSI)
+                {
+                    nic::msi_cap_offset = cap_ptr;
+                }
+                cap_ptr = next;
+            }
+        }
+    }
+
+    // ================================================================
+    // [FIX] CF8 capability 탐색 실패 시 ECAM 물리메모리로 직접 읽기
+    // ================================================================
+    // Hyper-V가 CF8/CFC PCI config space를 가상화 → Status bit4=0 → cap list 못 찾음
+    // ECAM은 물리 메모리 매핑이므로 NPT walk로 직접 접근 가능
+    // ================================================================
+    if (nic::msix_cap_offset == 0 && nic::ecam_base_detected != 0)
+    {
+        const std::uint64_t ecam_dev_base = nic::ecam_base_detected
+            + (static_cast<std::uint64_t>(nic::state.bus) << 20)
+            + (static_cast<std::uint64_t>(nic::state.dev) << 15)
+            + (static_cast<std::uint64_t>(nic::state.func) << 12);
+
+        // ECAM으로 PCI config space 4096바이트 중 처음 256바이트 접근
+        const auto* cfg = static_cast<const volatile std::uint8_t*>(
+            memory_manager::map_guest_physical(cached_slat_cr3, ecam_dev_base));
+        if (cfg)
+        {
+            // Status register (offset 0x06) bit 4 = Capabilities List
+            const std::uint16_t ecam_status = *reinterpret_cast<const volatile std::uint16_t*>(cfg + 0x06);
+            std::uint8_t cap_ptr = cfg[0x34]; // Capability pointer
+            network::dbg_ecam_status = ecam_status;
+            network::dbg_ecam_capptr = cap_ptr;
+
+            // status bit4 없어도 cap_ptr 유효하면 시도
+            if ((ecam_status & 0x10) || cap_ptr >= 0x40)
+            {
+                for (int safety = 0; safety < 48 && cap_ptr >= 0x40; safety++)
+                {
+                    const std::uint8_t cap_id = cfg[cap_ptr];
+                    const std::uint8_t next = cfg[cap_ptr + 1];
+
+                    if (cap_id == nic::PCI_CAP_MSIX)
+                    {
+                        nic::msix_cap_offset = cap_ptr;
+                        nic::msix_orig_msgctl = *reinterpret_cast<const volatile std::uint16_t*>(
+                            cfg + cap_ptr + 2);
+                    }
+                    else if (cap_id == nic::PCI_CAP_MSI)
+                    {
+                        nic::msi_cap_offset = cap_ptr;
+                    }
+
+                    cap_ptr = next;
+                }
+            }
+        }
     }
 
     // [핵심] igc의 경우 멀티큐 RX 초기화 (4개 큐 전부 폴링)
@@ -2059,6 +2079,7 @@ std::uint8_t network::process_pending()
                         if (nic::heap_va_pa_valid && !nic::igc_hv_tx.initialized)
                             nic::setup_igc_hv_tx_queue(&cached_slat_cr3);
                     }
+
                     is_initialized = 1;
                     nic::state.initialized = 1;
                 }
@@ -2069,6 +2090,20 @@ std::uint8_t network::process_pending()
     }
 
     const std::uint64_t now = read_tsc();
+
+    // ====================================================================
+    // ====================================================================
+    // [v5.4] VMEXIT keepalive 완전 제거
+    // ====================================================================
+    // v5.0: TXDCTL+TDBAL 체크 → NIC 사망
+    // v5.1: 조건부 TDBAL → NIC 사망
+    // v5.3: TDBAL==0만 → NIC 사망
+    // 결론: 매 VMEXIT MMIO read 자체가 OS NIC driver 타이밍 간섭
+    //       TDBAL read도 NIC config space 접근 → OS igc driver와 충돌
+    // v4 (keepalive 0, inject pre-check만): 99 MB/s, p2=0/0 검증됨
+    // TDBAL=0 복구는 inject pre-check 내부에서 처리
+    // ====================================================================
+
     if ((now - last_poll_tsc) < POLL_INTERVAL_TSC)
     {
         // [핵심] throttle 중이어도 pending TX는 처리!
@@ -2083,18 +2118,16 @@ std::uint8_t network::process_pending()
 
     poll_counter++;
 
-    // [핵심] RX poll 전에 pending TX flush!
-    // TX 완료 전에 새 RX 처리하면 response_buffer 덮어써짐
     if (deferred_tx.active) {
         flush_deferred_tx();
-        // TX 아직 진행중이면 RX poll 스킵 (buffer 보호)
         if (deferred_tx.active) {
             _InterlockedExchange(&rx_processing_lock, 0);
-            return 1;  // TX 진행중 = 유효한 작업
+            return 1;
         }
     }
 
     const std::uint8_t result = poll_rx_ring();
+    dbg_poll_entered++;  // [STALL DIAG] RX poll까지 도달 (deferred TX에 안 막힌 횟수)
 
     // [핵심] lock 해제 - 반드시 모든 경로에서 해제!
     _InterlockedExchange(&rx_processing_lock, 0);

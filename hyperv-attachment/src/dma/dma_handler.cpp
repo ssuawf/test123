@@ -1,4 +1,4 @@
-#include "dma_handler.h"
+ï»¿#include "dma_handler.h"
 #include "dma_protocol.h"
 
 #include "../memory_manager/memory_manager.h"
@@ -81,9 +81,9 @@ namespace
         dma::current_session_id = next_session_id++;
         dma::is_session_open = 1;
 
-        // [FIX] TX ring ¸®¼Â: ÀÌÀü ¼¼¼Ç Ãë¼Ò ÈÄ ring stuck ¹æÁö
-        // Å¬¶óÀÌ¾ðÆ®°¡ Áß°£¿¡ ²÷À¸¸é TX descriptor ringÀÌ ¼ÒÁøµÈ »óÅÂ·Î ³²À½
-        // »õ OPEN ½Ã ¸®¼ÂÇØ¾ß ÀÀ´ä Àü¼Û °¡´É
+        // [FIX] TX ring ï¿½ï¿½ï¿½ï¿½: ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ ï¿½ï¿½ ring stuck ï¿½ï¿½ï¿½ï¿½
+        // Å¬ï¿½ï¿½ï¿½Ì¾ï¿½Æ®ï¿½ï¿½ ï¿½ß°ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ TX descriptor ringï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½Â·ï¿½ ï¿½ï¿½ï¿½ï¿½
+        // ï¿½ï¿½ OPEN ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½Ø¾ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
         {
             const cr3 slat_cr3 = slat::hyperv_cr3();
             nic::reset_tx_ring(&slat_cr3);
@@ -185,8 +185,8 @@ namespace
         const std::uint32_t data_offset = entries_offset
             + count * sizeof(dma::scatter_entry_t);
 
-        // [Multi-UDP] IP fragmentation Á¦°ÅµÊ ¡æ UDP_SAFE_LIMIT ºÒÇÊ¿ä
-        // °¢ chunk°¡ µ¶¸³ UDP ÆÐÅ¶(¡Â1472B)À¸·Î Àü¼ÛµÇ¹Ç·Î ÀÀ´ä Å©±â Á¦ÇÑ ¾øÀ½
+        // [Multi-UDP] IP fragmentation ï¿½ï¿½ï¿½Åµï¿½ ï¿½ï¿½ UDP_SAFE_LIMIT ï¿½ï¿½ï¿½Ê¿ï¿½
+        // ï¿½ï¿½ chunkï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ UDP ï¿½ï¿½Å¶(ï¿½ï¿½1472B)ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ÛµÇ¹Ç·ï¿½ ï¿½ï¿½ï¿½ï¿½ Å©ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
         const std::uint32_t safe_capacity = response_capacity;
 
         //  scatter  
@@ -546,7 +546,11 @@ void dma::set_up()
 
     if (detected_max > 0)
     {
-        guest_pa_max = detected_max;
+        // [FIX] 1GB í”„ë¡œë¹™ ë‹¨ìœ„ë¡œ ì¸í•´ ë¶€ë¶„ì ìœ¼ë¡œ ë§¤í•‘ëœ ë§ˆì§€ë§‰ GBë¥¼ ë†“ì¹  ìˆ˜ ìžˆìŒ
+        // ì˜ˆ: ì‹¤ì œ RAMì´ 33.4GBì¸ë° 34GB í”„ë¡œë¸Œê°€ ì‹¤íŒ¨ â†’ PA_MAX=33GBë¡œ ì„¤ì •ë¨
+        // EPROCESS ë“± ì»¤ë„ êµ¬ì¡°ì²´ê°€ ì´ ë²”ìœ„ì— ìžˆìœ¼ë©´ MemProcFSê°€ ì ‘ê·¼ ë¶ˆê°€
+        // 2GB safety margin ì¶”ê°€ (unmapped PA ì½ê¸°ëŠ” zero/errorë¡œ ì•ˆì „í•˜ê²Œ ì²˜ë¦¬ë¨)
+        guest_pa_max = detected_max + 0x80000000ull;  // +2GB safety margin
     }
     // else:  128GB 
 }

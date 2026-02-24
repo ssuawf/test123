@@ -1,28 +1,28 @@
+ï»¿// ============================================================================
+// [ï¿½Ù½ï¿½] hyper-reV main.cpp - CPUID PROBE ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
 // ============================================================================
-// [ÇÙ½É] hyper-reV main.cpp - CPUID PROBE µğ¹ö±× ¹öÀü
-// ============================================================================
-// CPUID probe: Å¸°Ù OS¿¡¼­ magic CPUID È£Ãâ ¡æ HV°¡ °¡·ÎÃ¤¼­ »óÅÂ ¸®ÅÏ
+// CPUID probe: Å¸ï¿½ï¿½ OSï¿½ï¿½ï¿½ï¿½ magic CPUID È£ï¿½ï¿½ ï¿½ï¿½ HVï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½Ã¤ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
 //
-// AMD VMCB: save_state.rax¸¸ Á¢±Ù °¡´É (RBX/RCX/RDX´Â VMCB¿¡ ¾øÀ½)
-// MSVC __cpuid: int[4]·Î 32bit EAX¸¸ Ä¸Ã³ ¡æ °á°ú¸¦ 32bit·Î ÀÎÄÚµù
+// AMD VMCB: save_state.raxï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ (RBX/RCX/RDXï¿½ï¿½ VMCBï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½)
+// MSVC __cpuid: int[4]ï¿½ï¿½ 32bit EAXï¿½ï¿½ Ä¸Ã³ ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ 32bitï¿½ï¿½ ï¿½ï¿½ï¿½Úµï¿½
 //
-// Magic Leaf ¸ñ·Ï (°¢°¢ EAX 32bit ¸®ÅÏ):
-//   0x48565200 ¡æ 0xAA | is_initialized (magic confirm)
-//   0x48565201 ¡æ nic_type | bus<<8 | dev<<16 | func<<24
-//   0x48565202 ¡æ vendor_id | device_id<<16
-//   0x48565203 ¡æ mmio_base_gpa low 32bit
-//   0x48565204 ¡æ mmio_base_gpa high 32bit
-//   0x48565205 ¡æ rx_count | tx_count<<16
-//   0x48565206 ¡æ ecam_base low 32bit
-//   0x48565207 ¡æ mac[0-3]
-//   0x48565208 ¡æ mac[4] | mac[5]<<8 | attack_mac_learned<<16
-//   0x48565209 ¡æ packets_received low 32bit
-//   0x4856520A ¡æ packets_sent low 32bit
-//   0x4856520B ¡æ vmexit_total_count low 32bit
-//   0x4856520C ¡æ poll_counter low 32bit  
-//   0x4856520D ¡æ rx_ring_gpa low 32bit
-//   0x4856520E ¡æ rx_ring_gpa high 32bit
-//   0x4856520F ¡æ our_rx_index | nic.initialized<<16
+// Magic Leaf ï¿½ï¿½ï¿½ (ï¿½ï¿½ï¿½ï¿½ EAX 32bit ï¿½ï¿½ï¿½ï¿½):
+//   0x48565200 ï¿½ï¿½ 0xAA | is_initialized (magic confirm)
+//   0x48565201 ï¿½ï¿½ nic_type | bus<<8 | dev<<16 | func<<24
+//   0x48565202 ï¿½ï¿½ vendor_id | device_id<<16
+//   0x48565203 ï¿½ï¿½ mmio_base_gpa low 32bit
+//   0x48565204 ï¿½ï¿½ mmio_base_gpa high 32bit
+//   0x48565205 ï¿½ï¿½ rx_count | tx_count<<16
+//   0x48565206 ï¿½ï¿½ ecam_base low 32bit
+//   0x48565207 ï¿½ï¿½ mac[0-3]
+//   0x48565208 ï¿½ï¿½ mac[4] | mac[5]<<8 | attack_mac_learned<<16
+//   0x48565209 ï¿½ï¿½ packets_received low 32bit
+//   0x4856520A ï¿½ï¿½ packets_sent low 32bit
+//   0x4856520B ï¿½ï¿½ vmexit_total_count low 32bit
+//   0x4856520C ï¿½ï¿½ poll_counter low 32bit  
+//   0x4856520D ï¿½ï¿½ rx_ring_gpa low 32bit
+//   0x4856520E ï¿½ï¿½ rx_ring_gpa high 32bit
+//   0x4856520F ï¿½ï¿½ our_rx_index | nic.initialized<<16
 // ============================================================================
 
 #include "arch/arch.h"
@@ -36,6 +36,7 @@
 #include "interrupts/interrupts.h"
 #include "slat/slat.h"
 #include "slat/cr3/cr3.h"
+#include "slat/cr3/pte.h"
 #include "slat/violation/violation.h"
 
 #include "dma/dma_handler.h"
@@ -57,9 +58,9 @@ namespace
     std::uint64_t uefi_boot_image_size = 0;
 }
 
-// [ÇÙ½É] VMEXIT Ä«¿îÅÍ - HV alive È®ÀÎ¿ë
+// [ï¿½Ù½ï¿½] VMEXIT Ä«ï¿½ï¿½ï¿½ï¿½ - HV alive È®ï¿½Î¿ï¿½
 static volatile std::uint64_t vmexit_total_count = 0;
-// [ÇÙ½É] network retry Ä«¿îÅÍ (is_initialized=0ÀÏ ¶§ Áõ°¡)
+// [ï¿½Ù½ï¿½] network retry Ä«ï¿½ï¿½ï¿½ï¿½ (is_initialized=0ï¿½ï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½)
 static volatile std::uint64_t probe_poll_counter = 0;
 
 void clean_up_uefi_boot_image()
@@ -89,9 +90,14 @@ void process_first_vmexit()
     static std::uint8_t has_hidden_heap_pages = 0;
     static std::uint64_t vmexit_count = 0;
 
+    // [í•µì‹¬ FIX] hyperv_cr3ì—ì„œ heap ìˆ¨ê¸°ê¸° ì œê±°!
+    // ì´ìœ : DMA handlerê°€ hyperv_cr3ë¥¼ ì‚¬ìš©í•´ì„œ guest PA ì½ìŒ
+    //       heap GPAì™€ ê²¹ì¹˜ëŠ” ë¬¼ë¦¬ì£¼ì†Œê°€ dummy(0)ë¡œ ë°˜í™˜ë˜ì–´ EPROCESS walk ì‹¤íŒ¨
+    //       GuestëŠ” hook_cr3ë¡œ ì‹¤í–‰ ì¤‘ â†’ hook_cr3ì—ì„œë§Œ ìˆ¨ê¸°ë©´ ì¶©ë¶„ (set_up_hook_cr3ì—ì„œ ì²˜ë¦¬)
+    // ì´ì „: hide_heap_pages(hyperv_cr3()) â†’ GPA hole â†’ MemProcFS EPROCESS #5 ì‹¤íŒ¨
     if (has_hidden_heap_pages == 0 && 10000 <= ++vmexit_count)
     {
-        has_hidden_heap_pages = slat::hide_heap_pages(slat::hyperv_cr3());
+        has_hidden_heap_pages = 1;  // skip, hook_cr3 already has heap hidden
     }
 }
 
@@ -108,7 +114,7 @@ std::uint64_t do_vmexit_premature_return()
 // CPUID Probe Handler  
 // ============================================================================
 constexpr std::uint64_t PROBE_LEAF_BASE = 0x48565200;
-constexpr std::uint64_t PROBE_LEAF_MAX = 0x4856529B;  // 0xFB: first-frag header 0x90-0x9B Ãß°¡
+constexpr std::uint64_t PROBE_LEAF_MAX = 0x485652FF;  // [í•µì‹¬ ìˆ˜ì •] 0xBFâ†’0xFF í™•ì¥ (0xC0+ leaves í¬í•¨)
 
 std::uint8_t handle_cpuid_probe()
 {
@@ -125,12 +131,12 @@ std::uint8_t handle_cpuid_probe()
     switch (sub)
     {
     case 0x00: // magic + is_initialized + build tag
-        // [ÇÙ½É] 0xFB = ROTATING-SCANNER: ÀüÃ¼ ring È¸Àü ½ºÄµÀ¸·Î DD=0 Ä³½Ì
-        result = 0xAA00FB00u | static_cast<std::uint32_t>(network::is_initialized);
+        // [ï¿½Ù½ï¿½] 0xFB = ROTATING-SCANNER: ï¿½ï¿½Ã¼ ring È¸ï¿½ï¿½ ï¿½ï¿½Äµï¿½ï¿½ï¿½ï¿½ DD=0 Ä³ï¿½ï¿½
+        result = 0xAA00FF00u | static_cast<std::uint32_t>(network::is_initialized);
         break;
 
     case 0x01: // nic_type | bus | dev | func (use_adv_desc in bit4 of nic_type byte)
-        // [ÇÙ½É] bit0-3: nic_type, bit4: use_adv_desc, bit5: intel_gen(igc)
+        // [ï¿½Ù½ï¿½] bit0-3: nic_type, bit4: use_adv_desc, bit5: intel_gen(igc)
         result = static_cast<std::uint32_t>(nic::state.nic_type);
         if (nic::state.use_adv_desc) result |= 0x10;
         if (nic::state.intel_gen == nic::intel_gen_t::IGC) result |= 0x20;
@@ -204,18 +210,18 @@ std::uint8_t handle_cpuid_probe()
         break;
 
         // ========================================================================
-        // [ÇÙ½É] µğ¹ö±× Áø´Ü leaves (0x10-0x17)
+        // [ï¿½Ù½ï¿½] ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ leaves (0x10-0x17)
         // ========================================================================
-    case 0x10: // dbg_rx_call_count (process_rx_packet È£Ãâ È½¼ö)
+    case 0x10: // dbg_rx_call_count (process_rx_packet È£ï¿½ï¿½ È½ï¿½ï¿½)
         result = network::dbg_rx_call_count;
         break;
 
-    case 0x11: // dbg_rx_udp_count (UDP ÆÄ½Ì ¼º°ø) | dbg_rx_port_match (Æ÷Æ® ¸ÅÄª)
+    case 0x11: // dbg_rx_udp_count (UDP ï¿½Ä½ï¿½ ï¿½ï¿½ï¿½ï¿½) | dbg_rx_port_match (ï¿½ï¿½Æ® ï¿½ï¿½Äª)
         result = (network::dbg_rx_udp_count & 0xFFFF);
         result |= ((network::dbg_rx_port_match & 0xFFFF) << 16);
         break;
 
-    case 0x12: // dbg_rx_dma_call (process_complete_dma_payload È£Ãâ È½¼ö)
+    case 0x12: // dbg_rx_dma_call (process_complete_dma_payload È£ï¿½ï¿½ È½ï¿½ï¿½)
         result = network::dbg_rx_dma_call;
         break;
 
@@ -224,15 +230,15 @@ std::uint8_t handle_cpuid_probe()
         result |= (static_cast<std::uint32_t>(network::dbg_last_pkt_len) << 16);
         break;
 
-    case 0x14: // dbg_last_payload_magic (¸¶Áö¸· UDP payload Ã¹ 4¹ÙÀÌÆ®)
+    case 0x14: // dbg_last_payload_magic (ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ UDP payload Ã¹ 4ï¿½ï¿½ï¿½ï¿½Æ®)
         result = network::dbg_last_payload_magic;
         break;
 
-    case 0x15: // dbg_igc_dd_count (DD=1 °¨Áö È½¼ö)
+    case 0x15: // dbg_igc_dd_count (DD=1 ï¿½ï¿½ï¿½ï¿½ È½ï¿½ï¿½)
         result = network::dbg_igc_dd_count;
         break;
 
-    case 0x16: // use_adv_desc | rx_buf_cache_valid | last_known_rdt(¿ÜºÎ Á¢±Ù ºÒ°¡¡æ0)
+    case 0x16: // use_adv_desc | rx_buf_cache_valid | last_known_rdt(ï¿½Üºï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½Ò°ï¿½ï¿½ï¿½0)
         result = static_cast<std::uint32_t>(nic::state.use_adv_desc);
         result |= (static_cast<std::uint32_t>(nic::rx_buf_cache_valid) << 8);
         break;
@@ -242,30 +248,30 @@ std::uint8_t handle_cpuid_probe()
         break;
 
     case 0x18: // attack_src_port | our_src_port
-        // [ÇÙ½É] °ø°İ PC ephemeral port Áø´Ü - ÀÀ´äÀÌ ¿Ã¹Ù¸¥ Æ÷Æ®·Î °¡´ÂÁö È®ÀÎ
+        // [ï¿½Ù½ï¿½] ï¿½ï¿½ï¿½ï¿½ PC ephemeral port ï¿½ï¿½ï¿½ï¿½ - ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½Ã¹Ù¸ï¿½ ï¿½ï¿½Æ®ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ È®ï¿½ï¿½
         result = static_cast<std::uint32_t>(network::dbg_attack_src_port);
         break;
 
-    case 0x19: // [ÇÙ½É] ¸ÖÆ¼Å¥ Áø´Ü: active_queues | q0_count | q1_count | q2_count
-        // byte0: È°¼º RX Å¥ ¼ö, byte1-3: Q0~Q2 desc count (Ãà¾à)
+    case 0x19: // [ï¿½Ù½ï¿½] ï¿½ï¿½Æ¼Å¥ ï¿½ï¿½ï¿½ï¿½: active_queues | q0_count | q1_count | q2_count
+        // byte0: È°ï¿½ï¿½ RX Å¥ ï¿½ï¿½, byte1-3: Q0~Q2 desc count (ï¿½ï¿½ï¿½)
         result = (nic::igc_num_active_queues & 0xFF);
         result |= ((nic::igc_rxq[0].count / 16) & 0xFF) << 8;   // Q0 desc/16
         result |= ((nic::igc_rxq[1].count / 16) & 0xFF) << 16;  // Q1 desc/16
         result |= ((nic::igc_rxq[2].count / 16) & 0xFF) << 24;  // Q2 desc/16
         break;
 
-    case 0x1A: // [ÇÙ½É] TX Q1 °İ¸® »óÅÂ
-        // byte0: initialized, byte1: our_tdt, byte2-3: desc_count/16
+    case 0x1A: // [batch TX] TX Q1 ìƒíƒœ
+        // byte0: initialized, byte1: sw_tail, byte2-3: desc_count
         result = static_cast<std::uint32_t>(nic::igc_hv_tx.initialized);
-        result |= (static_cast<std::uint32_t>(nic::igc_hv_tx.our_tdt & 0xFF) << 8);
-        result |= ((nic::igc_hv_tx.desc_count / 16) & 0xFFFF) << 16;
+        result |= (static_cast<std::uint32_t>(nic::igc_hv_tx.sw_tail & 0xFF) << 8);
+        result |= ((nic::igc_hv_tx.desc_count) & 0xFFFF) << 16;
         break;
 
-    case 0x1B: // [ÇÙ½É] VA¡æPA offset low32
+    case 0x1B: // [ï¿½Ù½ï¿½] VAï¿½ï¿½PA offset low32
         result = static_cast<std::uint32_t>(nic::heap_va_to_pa_offset & 0xFFFFFFFF);
         break;
 
-    case 0x1C: // VA¡æPA offset high32
+    case 0x1C: // VAï¿½ï¿½PA offset high32
         result = static_cast<std::uint32_t>(
             static_cast<std::uint64_t>(nic::heap_va_to_pa_offset) >> 32);
         break;
@@ -274,68 +280,68 @@ std::uint8_t handle_cpuid_probe()
         result = static_cast<std::uint32_t>(nic::igc_hv_tx.desc_ring_gpa);
         break;
 
-    case 0x1E: // TX Q1 data_buf_gpa low32
-        result = static_cast<std::uint32_t>(nic::igc_hv_tx.data_buf_gpa);
+    case 0x1E: // [batch TX] nb_tx_free(lo16) + sw_head(hi16)
+        result = (nic::igc_hv_tx.nb_tx_free & 0xFFFF)
+            | ((nic::igc_hv_tx.sw_head & 0xFFFF) << 16);
         break;
 
-    case 0x1F: // TX Q1 TXDCTL ÃÖÁ¾°ª (bit25=ENABLE)
+    case 0x1F: // TX Q1 TXDCTL ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ (bit25=ENABLE)
         result = nic::igc_hv_tx.dbg_txdctl_val;
         break;
 
-    case 0x20: // TX Q1 DD ¼º°ø È½¼ö
+    case 0x20: // TX Q1 DD ï¿½ï¿½ï¿½ï¿½ È½ï¿½ï¿½
         result = network::dbg_txq1_dd_ok;
         break;
 
-    case 0x21: // TX Q1 DD Å¸ÀÓ¾Æ¿ô È½¼ö
+    case 0x21: // TX Q1 DD Å¸ï¿½Ó¾Æ¿ï¿½ È½ï¿½ï¿½
         result = network::dbg_txq1_dd_timeout;
         break;
 
-    case 0x22: // TX Q1 ¸¶Áö¸· TDH + Q0 fallback count
+    case 0x22: // TX Q1 ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ TDH + Q0 fallback count
         result = (network::dbg_txq1_q0_fallback << 16) | (network::dbg_txq1_last_tdh & 0xFFFF);
         break;
 
-    case 0x23: // desc_ring_gpa high32 (0ÀÌ¾î¾ß Á¤»ó)
+    case 0x23: // desc_ring_gpa high32 (0ï¿½Ì¾ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½)
         result = static_cast<std::uint32_t>(nic::igc_hv_tx.desc_ring_gpa >> 32);
         break;
 
-    case 0x24: // dma::process ¸¶Áö¸· ¸®ÅÏ°ª + rsp_nonzero È½¼ö
+    case 0x24: // dma::process ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½Ï°ï¿½ + rsp_nonzero È½ï¿½ï¿½
         result = (network::dbg_dma_rsp_nonzero << 16) | (network::dbg_dma_rsp_size & 0xFFFF);
         break;
 
-    case 0x25: // send_response ÁøÀÔ È½¼ö
+    case 0x25: // send_response ï¿½ï¿½ï¿½ï¿½ È½ï¿½ï¿½
         result = network::dbg_send_response_enter;
         break;
 
-    case 0x26: // send_response ½ÇÆĞ »çÀ¯ ºñÆ®ÇÊµå
+    case 0x26: // send_response ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½Æ®ï¿½Êµï¿½
         // bit0=!init, bit1=!mac, bit2=!txbuf, bit3=frag0
         result = network::dbg_send_response_fail;
         break;
 
-    case 0x27: // dma::process ½ÇÆĞ »çÀ¯ (1=size,2=magic,3=ver,4=cbmsg,5=type)
+    case 0x27: // dma::process ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ (1=size,2=magic,3=ver,4=cbmsg,5=type)
         result = network::dbg_dma_fail_reason;
         break;
 
-    case 0x28: // ¹ŞÀº version(hi16) + type(lo16)
+    case 0x28: // ï¿½ï¿½ï¿½ï¿½ version(hi16) + type(lo16)
         result = (network::dbg_dma_last_version << 16) | (network::dbg_dma_last_type & 0xFFFF);
         break;
 
-    case 0x29: // ¹ŞÀº cb_msg
+    case 0x29: // ï¿½ï¿½ï¿½ï¿½ cb_msg
         result = network::dbg_dma_last_cbmsg;
         break;
 
-    case 0x2A: // ip_frag¿¡¼­ ³Ñ¾î¿Â payload size
+    case 0x2A: // ip_fragï¿½ï¿½ï¿½ï¿½ ï¿½Ñ¾ï¿½ï¿½ payload size
         result = network::dbg_dma_payload_size;
         break;
 
-    case 0x2B: // TX descriptor cmd_type_len (DEXT=bit29 È®ÀÎ¿ë)
+    case 0x2B: // TX descriptor cmd_type_len (DEXT=bit29 È®ï¿½Î¿ï¿½)
         result = network::dbg_txq1_last_cmd;
         break;
 
-    case 0x2C: // TX descriptor olinfo_status (PAYLEN È®ÀÎ¿ë, before NIC writeback)
+    case 0x2C: // TX descriptor olinfo_status (PAYLEN í™•ì¸ìš©, before NIC writeback)
         result = network::dbg_txq1_last_olinfo;
         break;
-
-        // 0x30~0x42: volatile scalar Áø´Ü (ÆĞÅ¶ + IP + DMA + UDP)
+        // 0x30~0x42: volatile scalar ï¿½ï¿½ï¿½ï¿½ (ï¿½ï¿½Å¶ + IP + DMA + UDP)
     case 0x30: result = network::dbg_pkt_eth0; break;
     case 0x31: result = network::dbg_pkt_ip0; break;
     case 0x32: result = network::dbg_pkt_ip4; break;
@@ -347,7 +353,7 @@ std::uint8_t handle_cpuid_probe()
     case 0x38: result = network::dbg_ip_total; break;     // IP total_length
     case 0x39: result = network::dbg_ip_ihl; break;       // IP IHL*4
     case 0x3A: result = network::dbg_udp_payload_ptr_off; break; // udp_payload offset
-        // 0xF3 Ãß°¡
+        // 0xF3 ï¿½ß°ï¿½
     case 0x3B: result = network::dbg_udp_len; break;     // UDP length
     case 0x3C: result = network::dbg_udp_chksum; break;  // UDP checksum
     case 0x3D: result = network::dbg_payload_b0; break;   // byte[0]
@@ -356,17 +362,24 @@ std::uint8_t handle_cpuid_probe()
     case 0x40: result = network::dbg_payload_b8; break;   // byte[8] (type LSB)
     case 0x41: result = network::dbg_payload_b10; break;  // byte[10] (version LSB)
     case 0x42: result = network::dbg_pkt_len; break;      // descriptor pkt_len
-        // 0xF4: buf_addr + raw/copy ºñ±³
+        // 0xF4: buf_addr + raw/copy ï¿½ï¿½
     case 0x43: result = static_cast<std::uint32_t>(network::dbg_buf_addr & 0xFFFFFFFF); break; // buf_addr low32
     case 0x44: result = static_cast<std::uint32_t>(network::dbg_buf_addr >> 32); break;        // buf_addr high32
     case 0x45: result = network::dbg_desc_idx; break;      // descriptor index
     case 0x46: result = network::dbg_wb_staterr; break;    // write-back staterr
-    case 0x47: result = network::dbg_raw_ip_total; break;  // ¿øº» IP total
-    case 0x48: result = network::dbg_copy_ip_total; break; // º¹»çº» IP total
-    case 0x49: result = network::dbg_raw_dma4; break;      // ¿øº» cb_msg dword
-    case 0x4A: result = network::dbg_copy_dma4; break;     // º¹»çº» cb_msg dword
-    case 0x4B: result = network::dbg_raw_byte17; break;    // ¿øº» byte[17]
-    case 0x4C: result = network::dbg_copy_byte17; break;   // º¹»çº» byte[17]
+    case 0x47: result = network::dbg_raw_ip_total; break;  // ï¿½ï¿½ï¿½ï¿½ IP total
+    case 0x48: result = network::dbg_copy_ip_total; break; // ï¿½ï¿½ï¿½çº» IP total
+    case 0x49: result = network::dbg_raw_dma4; break;      // ï¿½ï¿½ï¿½ï¿½ cb_msg dword
+    case 0x4A: result = network::dbg_copy_dma4; break;     // ï¿½ï¿½ï¿½çº» cb_msg dword
+    case 0x4B: result = network::dbg_raw_byte17; break;    // ï¿½ï¿½ï¿½ï¿½ byte[17]
+    case 0x4C: result = network::dbg_copy_byte17; break;   // ï¿½ï¿½ï¿½çº» byte[17]
+
+        // [í•µì‹¬] MSI-X / MSI capability ì§„ë‹¨ (Parsec ì˜ì¡´ ì œê±°ìš©)
+    case 0x4D: result = (static_cast<std::uint32_t>(nic::msix_cap_offset) << 24)
+        | (static_cast<std::uint32_t>(nic::msi_cap_offset) << 16)
+        | static_cast<std::uint32_t>(nic::msix_orig_msgctl); break;
+    case 0x4E: result = nic::msix_discovered ? 1u : 0u; break;
+
         // 0xF7: guest buffer hex dump (16 DWORDs = 64 bytes)
     case 0x50: result = network::dbg_hex[0]; break;   // byte 0-3
     case 0x51: result = network::dbg_hex[1]; break;   // byte 4-7
@@ -387,8 +400,8 @@ std::uint8_t handle_cpuid_probe()
         // 0xF8: cache hit/miss counters
     case 0x60: result = network::dbg_cache_hit; break;
     case 0x61: result = network::dbg_cache_miss; break;
-    case 0x62: result = network::dbg_precache_update; break; // 0xFA: proactive cache ¼º°ø È½¼ö
-        // 0xFB: È¸Àü ½ºÄ³³Ê Áø´Ü
+    case 0x62: result = network::dbg_precache_update; break; // 0xFA: proactive cache ï¿½ï¿½ï¿½ï¿½ È½ï¿½ï¿½
+        // 0xFB: È¸ï¿½ï¿½ ï¿½ï¿½Ä³ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
     case 0x63: result = network::dbg_scan_total; break;
     case 0x64: result = network::dbg_scan_dd0; break;
     case 0x65: result = network::dbg_scan_dd1; break;
@@ -398,87 +411,183 @@ std::uint8_t handle_cpuid_probe()
     case 0x69: result = static_cast<std::uint32_t>(network::dbg_scan_first_hdr); break;
     case 0x6A: result = static_cast<std::uint32_t>(network::dbg_scan_first_hdr >> 32); break;
 
-        // 0xFB: TX Áø´Ü - ´Ü¼ø one-liner (º¹ÀâÇÑ {} ºí·ÏÀº ÄÄÆÄÀÏ·¯°¡ ¹«½ÃÇÔ!)
-        // leaf 0x1E = igc_hv_tx.data_buf_gpa ¡æ 0x7476B100 µ¿ÀÛÈ®ÀÎ (°°Àº ÆĞÅÏ »ç¿ë)
-    case 0x70: // »ó¼ö Å×½ºÆ®: ÀÌ °ªÀÌ ³ª¿À¸é leaf ½ÇÇà È®ÀÎ
+        // [DIAG] Buffer Content Scan ì§„ë‹¨ (0xC0-0xCA)
+        // C0: ipv4_count(16) | udp_count(16) packed
+        // C1: zero_count(16) | sample_idx(16) packed
+        // C2: ì²« UDP ë²„í¼ì˜ dst_port raw LE value
+        // C3-CA: ì²« UDP ë²„í¼ offset 12-47 ìŠ¤ëƒ…ìƒ· (9 dwords = 36 bytes, í•˜ì§€ë§Œ ì¤‘ë³µí™•ì¸)
+
+        // RSSê°€ UDP 28473ì„ ë‹¤ë¥¸ íë¡œ ë³´ë‚´ë©´ Queue 0ì—ì„œ ëª» ì¡ìŒ!
+            // --- Batch TX diagnostics (0x70-0x7E) ---
+    case 0x70: // ì—°ê²° í…ŒìŠ¤íŠ¸
         result = 0xCAFE0070;
         break;
-    case 0x71: // data_buf_va low32 (main.cpp°¡ º¸´Â °ª)
-        result = static_cast<std::uint32_t>(reinterpret_cast<std::uint64_t>(nic::igc_hv_tx.data_buf_va));
+    case 0x71: // [batch TX] enqueue ì´ íšŸìˆ˜
+        result = nic::igc_hv_tx.dbg_enqueue_count;
         break;
-    case 0x72: // data_buf_va high32
-        result = static_cast<std::uint32_t>(reinterpret_cast<std::uint64_t>(nic::igc_hv_tx.data_buf_va) >> 32);
+    case 0x72: // [batch TX] commit ì´ íšŸìˆ˜
+        result = nic::igc_hv_tx.dbg_commit_count;
         break;
-    case 0x73: // desc_ring_va low32
+    case 0x73: // [batch TX] cleanup íšŒìˆ˜ ì´ slot ìˆ˜
+        result = nic::igc_hv_tx.dbg_cleanup_reclaimed;
+        break;
+    case 0x74: // [batch TX] ring full ë°œìƒ íšŸìˆ˜
+        result = nic::igc_hv_tx.dbg_ring_full_count;
+        break;
+    case 0x75: // desc_ring_va low32
         result = static_cast<std::uint32_t>(reinterpret_cast<std::uint64_t>(nic::igc_hv_tx.desc_ring_va));
         break;
-    case 0x74: // &igc_hv_tx ÁÖ¼Ò low32 (struct ÀÎ½ºÅÏ½º ÁÖ¼Ò)
-        result = static_cast<std::uint32_t>(reinterpret_cast<std::uint64_t>(&nic::igc_hv_tx));
+    case 0x76: // [batch TX] nb_tx_free (í˜„ì¬ ì‚¬ìš© ê°€ëŠ¥ slot)
+        result = nic::igc_hv_tx.nb_tx_free;
         break;
-    case 0x75: // &igc_hv_tx ÁÖ¼Ò high32
-        result = static_cast<std::uint32_t>(reinterpret_cast<std::uint64_t>(&nic::igc_hv_tx) >> 32);
+    case 0x77: // [batch TX] sw_tail
+        result = nic::igc_hv_tx.sw_tail;
         break;
-    case 0x76: // diag_canary (inject¿¡¼­ ±â·Ï, 0ÀÌ¸é cross-TU ¹®Á¦)
-        result = nic::igc_hv_tx.diag_canary;
+    case 0x78: // [batch TX] sw_head
+        result = nic::igc_hv_tx.sw_head;
         break;
-    case 0x77: // TX frame[0:3] = DST MAC ¾Õ 4¹ÙÀÌÆ®
-        result = nic::igc_hv_tx.diag_eth_dw0;
+    case 0x79: // [batch TX] consecutive_fail
+        result = nic::igc_hv_tx.consecutive_fail;
         break;
-    case 0x78: // TX frame[4:7] = DST MAC[4:5] + SRC MAC[0:1]
-        result = nic::igc_hv_tx.diag_eth_dw1;
+    case 0x7A: // reserved
+        result = 0;
         break;
-    case 0x79: // TX frame[8:11] = SRC MAC[2:5]
-        result = nic::igc_hv_tx.diag_eth_dw2;
+    case 0x7B: // reserved
+        result = 0;
         break;
-    case 0x7A: // TX frame[30:33] = DST IP
-        result = nic::igc_hv_tx.diag_ip_dst;
+    case 0x7C: // reserved
+        result = 0;
         break;
-    case 0x7B: // TX frame[34:37] = UDP src_port + dst_port
-        result = nic::igc_hv_tx.diag_udp_ports;
+    case 0x7D: // reserved
+        result = 0;
         break;
-    case 0x7C: // our_src_port raw (passed to fragment_and_send)
-        result = nic::igc_hv_tx.diag_our_port;
-        break;
-    case 0x7D: // attack_src_port raw
-        result = nic::igc_hv_tx.diag_atk_port;
-        break;
-    case 0x7E: // TX frame[38:41] = UDP len + chksum
-        result = nic::igc_hv_tx.diag_udp_raw8;
+    case 0x7E: // reserved
+        result = 0;
         break;
 
-        // 0xFB: NIC TX Åë°è ·¹Áö½ºÅÍ (MMIO read-on-clear!)
-        // probe¿¡¼­ ÀĞÀ¸¸é NIC°¡ Ä«¿îÅÍ¸¦ Å¬¸®¾îÇÏ¹Ç·Î, Ä³½ÃµÈ °ª »ç¿ë
-    case 0x80: result = network::dbg_nic_gptc; break;   // Good Packets TX
-    case 0x81: result = network::dbg_nic_tpt; break;    // Total Packets TX
-    case 0x82: result = network::dbg_nic_gotcl; break;  // Good Octets TX (low)
+        // 0xFB: NIC TX ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ (MMIO read-on-clear!)
+        // probeï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ NICï¿½ï¿½ Ä«ï¿½ï¿½ï¿½Í¸ï¿½ Å¬ï¿½ï¿½ï¿½ï¿½ï¿½Ï¹Ç·ï¿½, Ä³ï¿½Ãµï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½
 
-        // --- Fragment Áø´Ü (0x83-0x8A) ---
-        // [ÇÙ½É] OPEN(32B)=´ÜÀÏÆĞÅ¶ OK, ReadScatter(62KB)=~43 fragments ¾ÈµµÂø
-        // fragment_and_send°¡ ½ÇÁ¦·Î 43°³ ¸¸µå´ÂÁö, inject°¡ ¼º°øÇÏ´ÂÁö ÃßÀû
-    case 0x83: result = network::dbg_frag_last_count; break;  // fragment_and_send ¸®ÅÏ°ª (¿¹»ó: ~43)
-    case 0x84: result = network::dbg_frag_last_rspsize; break; // DMA rsp Å©±â (¿¹»ó: 62488)
-    case 0x85: result = network::dbg_inject_total; break;      // inject ÃÑ È£Ãâ È½¼ö
-    case 0x86: result = network::dbg_inject_success; break;    // inject DD OK È½¼ö
-    case 0x87: result = network::dbg_inject_fail; break;       // inject µå¶ø/Å¸ÀÓ¾Æ¿ô È½¼ö
-    case 0x88: result = network::dbg_inject_first_len; break;  // Ã¹ fragment frame_len (¿¹»ó: 1514)
-    case 0x89: result = network::dbg_inject_last_len; break;   // ¸¶Áö¸· fragment frame_len
-    case 0x8A: result = network::dbg_inject_is_first; break;   // is_first ÇÃ·¡±× (0=Á¤»ó Å¬¸®¾îµÊ)
+        // --- Fragment ï¿½ï¿½ï¿½ï¿½ (0x83-0x8A) ---
+        // [ï¿½Ù½ï¿½] OPEN(32B)=ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Å¶ OK, ReadScatter(62KB)=~43 fragments ï¿½Èµï¿½ï¿½ï¿½
+        // fragment_and_sendï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ 43ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½, injectï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ï¿½Ï´ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½
+    case 0x83: result = network::dbg_frag_last_count; break;  // fragment_and_send ï¿½ï¿½ï¿½Ï°ï¿½ (ï¿½ï¿½ï¿½ï¿½: ~43)
+    case 0x85: result = network::dbg_inject_total; break;      // inject ï¿½ï¿½ È£ï¿½ï¿½ È½ï¿½ï¿½
+    case 0x86: result = network::dbg_inject_success; break;    // inject DD OK È½ï¿½ï¿½
+    case 0x87: result = network::dbg_inject_fail; break;       // inject ï¿½ï¿½ï¿½/Å¸ï¿½Ó¾Æ¿ï¿½ È½ï¿½ï¿½
+    case 0x89: result = network::dbg_inject_last_len; break;   // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ fragment frame_len
 
-        // --- Ã¹ Fragment ÇÁ·¹ÀÓ Çì´õ hex dump (0x90-0x9B) ---
-        // [ÇÙ½É] OPEN(74B) µµÂø vs Fragment(1514B) ¹ÌµµÂø ¡æ Çì´õ Â÷ÀÌ È®ÀÎ
-        // ÇÁ·¹ÀÓ Ã¹ 48¹ÙÀÌÆ® = ETH(14) + IP(20) + UDP(8) + DATA(6)
-    case 0x90: result = network::dbg_first_hdr[0];  break; // frame[0:3]   DST MAC[0:3]
-    case 0x91: result = network::dbg_first_hdr[1];  break; // frame[4:7]   DST MAC[4:5] + SRC MAC[0:1]
-    case 0x92: result = network::dbg_first_hdr[2];  break; // frame[8:11]  SRC MAC[2:5]
-    case 0x93: result = network::dbg_first_hdr[3];  break; // frame[12:15] EtherType + IP ver_ihl + tos
-    case 0x94: result = network::dbg_first_hdr[4];  break; // frame[16:19] IP total_len + identification
-    case 0x95: result = network::dbg_first_hdr[5];  break; // frame[20:23] IP flags_frag + ttl + protocol
-    case 0x96: result = network::dbg_first_hdr[6];  break; // frame[24:27] IP checksum + src_ip[0:1]
-    case 0x97: result = network::dbg_first_hdr[7];  break; // frame[28:31] src_ip[2:3] + dst_ip[0:1]
-    case 0x98: result = network::dbg_first_hdr[8];  break; // frame[32:35] dst_ip[2:3] + UDP src_port
-    case 0x99: result = network::dbg_first_hdr[9];  break; // frame[36:39] UDP dst_port + UDP length
-    case 0x9A: result = network::dbg_first_hdr[10]; break; // frame[40:43] UDP checksum + DMA data[0:1]
-    case 0x9B: result = network::dbg_first_hdr[11]; break; // frame[44:47] DMA data[2:5]
+        // --- TX Frame Snapshot (flush_deferred_tx inject ì§ì „ ìº¡ì²˜) ---
+        // [í•µì‹¬] ì‹¤ì œ NICì— ì „ë‹¬ë˜ëŠ” í”„ë ˆì„ ë‚´ìš© í™•ì¸!
+    case 0x8B: result = network::dbg_tx_snap[0];  break; // frame[0:3]   DST MAC[0:3]
+    case 0x8C: result = network::dbg_tx_snap[1];  break; // frame[4:7]   DST MAC[4:5]+SRC MAC[0:1]
+    case 0x8D: result = network::dbg_tx_snap[2];  break; // frame[8:11]  SRC MAC[2:5]
+    case 0x8E: result = network::dbg_tx_snap[3];  break; // frame[12:15] EtherType+IP ver
+    case 0x8F: result = network::dbg_tx_snap_ports; break; // our_src_port<<16 | attack_src_port
+
+        // --- ì²« Fragment í”„ë ˆì„ í—¤ë” hex dump (0x90-0x9B) ---
+        // [ï¿½Ù½ï¿½] OPEN(74B) ï¿½ï¿½ï¿½ï¿½ vs Fragment(1514B) ï¿½Ìµï¿½ï¿½ï¿½ ï¿½ï¿½ ï¿½ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½ È®ï¿½ï¿½
+        // ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ Ã¹ 48ï¿½ï¿½ï¿½ï¿½Æ® = ETH(14) + IP(20) + UDP(8) + DATA(6)
+
+    // [TX STALL FIX] auto-recovery diagnostics
+    case 0x9C: result = (network::dbg_txq1_re_enable & 0xFFFF) | ((network::dbg_txq1_consec_max & 0xFFFF) << 16); break;
+    case 0x9D: result = nic::igc_hv_tx.consecutive_fail; break;  // current consecutive fail count
+
+        // [STALL DIAG] VMEXIT vs RX processing
+        // 0x9E: process_pending ì‹¤ì œ í˜¸ì¶œ íšŸìˆ˜ (VMEXIT ì¤‘ throttle ì•ˆ ê±¸ë¦° ê²ƒ)
+        // 0x9F: poll_rxì—ì„œ DMA íŒ¨í‚· ë°œê²¬ íšŸìˆ˜
+        // ë¹„êµ: 9E >> 9F â†’ HVëŠ” í™œë°œí•œë° íŒ¨í‚· ì•ˆ ì˜´ = NIC/OS ë¬¸ì œ
+        //       9E â‰ˆ 0 â†’ VMEXIT ìì²´ê°€ ì•ˆ ì˜´ = ê·¼ë³¸ì  ë¬¸ì œ
+    case 0x9E: result = network::dbg_poll_entered; break;
+    case 0x9F: result = static_cast<std::uint32_t>(network::dbg_cache_hit); break;
+
+        // [DTB DIAG] Guest CR3 â†’ MemProcFS -dtb ìˆ˜ë™ ì§€ì •ìš©
+        // EPROCESS #5 ì‹¤íŒ¨ ì‹œ: ì´ ê°’ìœ¼ë¡œ -dtb ì˜µì…˜ í…ŒìŠ¤íŠ¸
+        // context switchë§ˆë‹¤ ë³€ê²½ â†’ ì—¬ëŸ¬ë²ˆ ì½ì–´ì„œ ë¹ˆë„ ë†’ì€ ê°’ = System DTB
+    case 0xA0: { cr3 gcr3 = arch::get_guest_cr3(); result = static_cast<std::uint32_t>(gcr3.flags); break; }
+    case 0xA1: { cr3 gcr3 = arch::get_guest_cr3(); result = static_cast<std::uint32_t>(gcr3.flags >> 32); break; }
+
+             // [HEAP DIAG] Heap ë¬¼ë¦¬ì£¼ì†Œ ë²”ìœ„ â†’ EPROCESSì™€ overlap í™•ì¸ìš©
+             // heap GPAê°€ EPROCESSê°€ ìˆëŠ” GPAì™€ ê²¹ì¹˜ë©´ hide_heapì´ ë¬¸ì œì¼ ìˆ˜ ìˆìŒ
+    case 0xA2: result = static_cast<std::uint32_t>(heap_manager::initial_physical_base); break;
+    case 0xA3: result = static_cast<std::uint32_t>(heap_manager::initial_physical_base >> 32); break;
+    case 0xA4: result = static_cast<std::uint32_t>(heap_manager::initial_size); break;
+    case 0xA5: result = static_cast<std::uint32_t>(heap_manager::initial_size >> 32); break;
+        // [0xFD DIAG] discover_nic ìŠ¤ìº” ê²°ê³¼
+    case 0xAC: // total_devs | intel_found | igc_found | map_fail(low8)
+        result = (nic::dbg_scan_total_devs & 0xFF);
+        result |= ((nic::dbg_scan_intel_found & 0xFF) << 8);
+        result |= ((nic::dbg_scan_igc_found & 0xFF) << 16);
+        result |= ((nic::dbg_scan_map_fail & 0xFF) << 24);
+        break;
+    case 0xAD: // last_vid | last_did
+        result = static_cast<std::uint32_t>(nic::dbg_scan_last_vid);
+        result |= (static_cast<std::uint32_t>(nic::dbg_scan_last_did) << 16);
+        break;
+    case 0xAE: // last_bus
+        result = static_cast<std::uint32_t>(nic::dbg_scan_last_bus);
+        break;
+    case 0xAF: // match_bus | fail_step | class | subclass
+        result = static_cast<std::uint32_t>(nic::dbg_match_bus);
+        result |= (static_cast<std::uint32_t>(nic::dbg_fail_step) << 8);
+        result |= (static_cast<std::uint32_t>(nic::dbg_class) << 16);
+        result |= (static_cast<std::uint32_t>(nic::dbg_subclass) << 24);
+        break;
+    case 0xB0: // bar0_raw
+        result = nic::dbg_bar0_raw;
+        break;
+        // [0xFD DIAG] read_ring_config debug
+    case 0xB6: // rx_count | tx_count
+        break;
+    case 0xB9: // pci_cmd_before | pci_cmd_after
+        result = static_cast<std::uint32_t>(nic::dbg_pci_cmd_before);
+        result |= (static_cast<std::uint32_t>(nic::dbg_pci_cmd_after) << 16);
+        break;
+    case 0xBA: // pmcsr_before | pmcsr_after
+        break;
+    case 0xBB: // pm_cap_offset (low8) | rcfg_attempts (byte1)
+        break;
+    case 0xBC: // txconfig_after_wake (Wakeí›„ MMIO ë™ì‘ í™•ì¸)
+        break;
+    case 0xBD: // rcfg_cmd_before | rcfg_cmd_after (read_ring_config ë‚´ë¶€ CMD)
+        break;
+    case 0xBE: // rcfg_txconfig (CMD í™œì„±í™” í›„ TXCONFIG í™•ì¸)
+        break;
+
+        // ====================================================================
+        // [v4+fix] NIC Recovery ì§„ë‹¨ â€” stored snapshots (MMIO ë¶ˆí•„ìš”)
+        // 0xC0: ë§ˆì§€ë§‰ recovery ì‹œ CTRL (bit6=SLU)
+        // 0xC1: ë§ˆì§€ë§‰ recovery ì‹œ STATUS (bit1=LU)
+        // 0xC2: ë§ˆì§€ë§‰ recovery ì‹œ TDBAL
+        // 0xC3: ë§ˆì§€ë§‰ recovery ì‹œ TXDCTL
+        // 0xC4: re_enable count(hi16) | consecutive_fail(lo16)
+        // 0xC5: nic_wake_count
+        // ====================================================================
+    case 0xC0: result = network::dbg_last_recovery_ctrl; break;
+    case 0xC1: result = network::dbg_last_recovery_status; break;
+    case 0xC2: result = network::dbg_last_recovery_tdbal; break;
+    case 0xC3: result = network::dbg_last_recovery_txdctl; break;
+    case 0xC4: {
+        result = (network::dbg_txq1_re_enable << 16)
+            | (nic::igc_hv_tx.consecutive_fail & 0xFFFF);
+        break;
+    }
+    case 0xC5: result = network::dbg_nic_wake_count; break;
+
+        // ====================================================================
+        // [EPT MMIO] TXQ1 ë³´í˜¸ ì§„ë‹¨
+        // ====================================================================
+    case 0xD0: // enabled(lo8) | reprotect_pending(byte1) | txq_page_gpa page#(hi16)
+        result = static_cast<std::uint32_t>(nic::mmio_protect::enabled)
+            | (static_cast<std::uint32_t>(nic::mmio_protect::reprotect_pending) << 8)
+            | ((static_cast<std::uint32_t>(nic::mmio_protect::txq_page_gpa >> 12) & 0xFFFF) << 16);
+        break;
+    case 0xD1: result = nic::mmio_protect::dbg_txq1_blocked; break;   // TXQ1 ì“°ê¸° ì°¨ë‹¨ íšŸìˆ˜
+    case 0xD2: result = nic::mmio_protect::dbg_passthrough; break;     // non-TXQ1 í†µê³¼ íšŸìˆ˜
+
+    case 0xF8: result = network::dbg_ecam_status; break; // ECAM PCI Status
+    case 0xF9: result = network::dbg_ecam_capptr; break; // ECAM cap pointer
+
     }
 
     vmcb->save_state.rax = static_cast<std::uint64_t>(result);
@@ -488,6 +597,121 @@ std::uint8_t handle_cpuid_probe()
     return 0;
 #endif
 }
+
+// ============================================================================
+// [EPT MMIO Intercept] TXQ1 ë ˆì§€ìŠ¤í„° ì“°ê¸° ì°¨ë‹¨
+// ============================================================================
+// Guest OS igc ë“œë¼ì´ë²„ê°€ NIC ë¦¬ì…‹ ì‹œ Q0~Q3 ì „ì²´ TXDCTL=0ìœ¼ë¡œ ë°€ì–´ë²„ë¦¼
+// â†’ TXQ1 (ìš°ë¦¬ ì „ìš©) ë¹„í™œì„±í™”ë¨ â†’ recovery í•„ìš”í–ˆìŒ
+//
+// í•´ê²°: BAR0+0xE000 í˜ì´ì§€ë¥¼ EPTì—ì„œ write ì°¨ë‹¨
+// - TXQ1 ì“°ê¸° â†’ ë¬´ì‹œ (advance RIP)
+// - TXQ0/Q2/Q3 ì“°ê¸° â†’ ì¼ì‹œ í—ˆìš© + ë‹¤ìŒ VMEXITì—ì„œ ì¬ë³´í˜¸
+//
+// ìš°ë¦¬ HVì˜ write_reg()ëŠ” Ring-1ì—ì„œ ì§ì ‘ MMIO â†’ EPT ì•ˆ ê±°ì¹¨ â†’ ì˜í–¥ ì—†ìŒ
+// ============================================================================
+#ifdef _INTELMACHINE
+
+static void protect_txq_page(const cr3 slat_cr3)
+{
+    const std::uint64_t gpa = nic::mmio_protect::txq_page_gpa;
+    if (gpa == 0) return;
+
+    slat_pte* pte = slat::get_pte(slat_cr3, { .address = gpa }, 1);
+    if (pte && pte->read_access) {
+        pte->write_access = 0;  // read-only (write â†’ EPT violation)
+    }
+}
+
+static void unprotect_txq_page(const cr3 slat_cr3)
+{
+    const std::uint64_t gpa = nic::mmio_protect::txq_page_gpa;
+    if (gpa == 0) return;
+
+    slat_pte* pte = slat::get_pte(slat_cr3, { .address = gpa }, 0);
+    if (pte) {
+        pte->write_access = 1;  // write í—ˆìš©
+    }
+}
+
+// NIC ì´ˆê¸°í™” í›„ í˜¸ì¶œ: TXQ í˜ì´ì§€ EPT ë³´í˜¸ ì„¤ì •
+static void setup_txq_mmio_protection()
+{
+    if (nic::state.mmio_base_gpa == 0) return;
+    if (nic::state.intel_gen != nic::intel_gen_t::IGC) return;
+
+    // TXQ ë ˆì§€ìŠ¤í„° í˜ì´ì§€: BAR0 + 0xE000 (4KB pageì— TXQ0~Q3 ì „ë¶€ í¬í•¨)
+    nic::mmio_protect::txq_page_gpa = nic::state.mmio_base_gpa + 0xE000;
+
+    // ì–‘ìª½ CR3ì—ì„œ ë³´í˜¸ (hyperv_cr3 = ì¼ë°˜, hook_cr3 = ì½”ë“œí›…ìš©)
+    protect_txq_page(slat::hyperv_cr3());
+    protect_txq_page(slat::hook_cr3());
+
+    // EPT TLB ë¬´íš¨í™”
+    slat::flush_current_logical_processor_cache();
+
+    nic::mmio_protect::enabled = 1;
+    nic::mmio_protect::reprotect_pending = 0;
+}
+
+// SLAT violation ì¤‘ TXQ MMIO write ì²˜ë¦¬
+// ë¦¬í„´: 1 = ì²˜ë¦¬ì™„ë£Œ (premature return), 0 = ìš°ë¦¬ ê´€í•  ì•„ë‹˜
+static std::uint8_t handle_txq_mmio_violation()
+{
+    if (!nic::mmio_protect::enabled) return 0;
+
+    const auto qualification = arch::get_exit_qualification();
+
+    // EPT translation ìœ„ë°˜ë§Œ ì²˜ë¦¬
+    if (!qualification.caused_by_translation) return 0;
+
+    // write access ìœ„ë°˜ë§Œ ì²˜ë¦¬
+    if (!qualification.write_access) return 0;
+
+    const std::uint64_t gpa = arch::get_guest_physical_address();
+    const std::uint64_t page_gpa = gpa & ~0xFFFULL;
+
+    // ìš°ë¦¬ê°€ ë³´í˜¸í•œ TXQ í˜ì´ì§€ì¸ì§€ í™•ì¸
+    if (page_gpa != nic::mmio_protect::txq_page_gpa) return 0;
+
+    // í˜ì´ì§€ ë‚´ offset ê³„ì‚°
+    const std::uint32_t offset = static_cast<std::uint32_t>(gpa & 0xFFF);
+
+    if (offset >= nic::mmio_protect::TXQ1_OFFSET_START &&
+        offset < nic::mmio_protect::TXQ1_OFFSET_END)
+    {
+        // [ì°¨ë‹¨] TXQ1 ë ˆì§€ìŠ¤í„° ì“°ê¸° â†’ ë¬´ì‹œí•˜ê³  RIP ì „ì§„
+        arch::advance_guest_rip();
+        nic::mmio_protect::dbg_txq1_blocked++;
+        return 1;
+    }
+
+    // [í†µê³¼] TXQ0/Q2/Q3 ë“± ë‹¤ë¥¸ ë ˆì§€ìŠ¤í„° â†’ ì¼ì‹œ í—ˆìš©
+    // write_access ë³µì› â†’ Guest ëª…ë ¹ ì¬ì‹¤í–‰ â†’ ë‹¤ìŒ VMEXITì—ì„œ ì¬ë³´í˜¸
+    unprotect_txq_page(slat::hyperv_cr3());
+    unprotect_txq_page(slat::hook_cr3());
+    nic::mmio_protect::reprotect_pending = 1;
+    nic::mmio_protect::dbg_passthrough++;
+
+    // RIP ì•ˆ ì „ì§„ â†’ Guestê°€ ëª…ë ¹ ì¬ì‹¤í–‰ (ì´ë²ˆì—” write í—ˆìš©ë¨)
+    return 1;
+}
+
+// ë§¤ VMEXIT: passthrough í›„ ì¬ë³´í˜¸
+static void check_reprotect_txq_page()
+{
+    if (!nic::mmio_protect::reprotect_pending) return;
+
+    protect_txq_page(slat::hyperv_cr3());
+    protect_txq_page(slat::hook_cr3());
+
+    // EPT TLB ë¬´íš¨í™” â€” ìºì‹œëœ write í—ˆìš© í•­ëª© ì œê±°
+    slat::flush_current_logical_processor_cache();
+
+    nic::mmio_protect::reprotect_pending = 0;
+}
+
+#endif // _INTELMACHINE
 
 // ============================================================================
 // VMEXIT Handler
@@ -509,16 +733,37 @@ std::uint64_t vmexit_handler_detour(
     }
 
     // SLAT violation
-    if (arch::is_slat_violation(exit_reason) == 1
-        && slat::violation::process() == 1)
+    if (arch::is_slat_violation(exit_reason) == 1)
     {
-        return do_vmexit_premature_return();
+#ifdef _INTELMACHINE
+        // [EPT MMIO] TXQ1 ì“°ê¸° ì°¨ë‹¨ â€” ì¼ë°˜ violation ì „ì— ì²´í¬
+        if (handle_txq_mmio_violation() == 1)
+            return do_vmexit_premature_return();
+#endif
+        if (slat::violation::process() == 1)
+            return do_vmexit_premature_return();
     }
+
+#ifdef _INTELMACHINE
+    // [EPT MMIO] passthrough í›„ ì¬ë³´í˜¸ (ë§¤ VMEXIT)
+    check_reprotect_txq_page();
+#endif
 
     // NIC polling
     network::process_pending();
 
-    // network retry Ä«¿îÅÍ
+#ifdef _INTELMACHINE
+    // [EPT MMIO] ë¹„í™œì„±í™” â€” TXQ0/TXQ1 ë™ì¼ 4KB í˜ì´ì§€ ë¬¸ì œ
+    // OSê°€ TXQ0 TDT writeí•  ë•Œë§ˆë‹¤ EPT violation â†’ 9ms latency ì›ì¸
+    // TODO: sub-page emulation ë˜ëŠ” instruction decodeë¡œ í•´ê²°
+    // if (network::is_initialized && !nic::mmio_protect::enabled
+    //     && nic::igc_hv_tx.initialized)
+    // {
+    //     setup_txq_mmio_protection();
+    // }
+#endif
+
+    // network retry ì¹´ìš´í„°
     if (!network::is_initialized)
         probe_poll_counter++;
 
@@ -531,7 +776,6 @@ std::uint64_t vmexit_handler_detour(
     return reinterpret_cast<vmexit_handler_t>(
         original_vmexit_handler)(a1, a2, a3, a4);
 }
-
 // ============================================================================
 // Entry Point
 // ============================================================================
@@ -570,9 +814,7 @@ void entry_point(
     void* const mapped_heap_usable_base = memory_manager::map_host_physical(
         heap_physical_usable_base);
 
-    // [ÇÙ½É] VA¡æGPA offset °è»ê - Èü VA¿¡¼­ ¹°¸®ÁÖ¼Ò¸¦ ¿ª»êÇÏ´Â »ó¼ö
-    // map_host_physical(PA) = VA ÀÌ¹Ç·Î offset = VA - PA
-    // ÀÌÈÄ: GPA = VA - offset (¸ğµç Èü ÇÒ´ç ÆäÀÌÁö¿¡ Àû¿ë)
+    // [í•µì‹¬] VAâ†’GPA offset ê³„ì‚° - í™ VAì—ì„œ ë¬¼ë¦¬ì£¼ì†Œë¥¼ ì—­ì‚°í•˜ëŠ” ìƒìˆ˜
     nic::heap_va_to_pa_offset = static_cast<std::int64_t>(
         reinterpret_cast<std::uint64_t>(mapped_heap_usable_base))
         - static_cast<std::int64_t>(heap_physical_usable_base);
