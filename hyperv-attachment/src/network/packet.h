@@ -23,19 +23,16 @@
 
 namespace packet
 {
-    //  DMA  UDP 
-    constexpr std::uint16_t DMA_PORT = 28473;
-
     //    (Ethernet MTU )
     // : jumbo frame .  MTU 1500 .
-    constexpr std::uint32_t MAX_PACKET_SIZE  = 1514;     // ETH(14) + MTU(1500)
+    constexpr std::uint32_t MAX_PACKET_SIZE = 1514;     // ETH(14) + MTU(1500)
     constexpr std::uint32_t MAX_PAYLOAD_SIZE = 1458;     // MTU(1500) - IP(20) - UDP(8) - ETH excluded
-    constexpr std::uint32_t HEADER_SIZE      = 42;       // ETH(14) + IP(20) + UDP(8)
+    constexpr std::uint32_t HEADER_SIZE = 42;       // ETH(14) + IP(20) + UDP(8)
 
     // ========================================================================
     // Ethernet Header (14B)
     // ========================================================================
-    #pragma pack(push, 1)
+#pragma pack(push, 1)
 
     struct eth_hdr_t
     {
@@ -91,7 +88,7 @@ namespace packet
     };
     static_assert(sizeof(full_packet_t) == 42);
 
-    #pragma pack(pop)
+#pragma pack(pop)
 
     // ========================================================================
     //    (  )
@@ -106,9 +103,9 @@ namespace packet
     inline std::uint32_t bswap32(const std::uint32_t v)
     {
         return ((v >> 24) & 0xFF)
-             | ((v >> 8)  & 0xFF00)
-             | ((v << 8)  & 0xFF0000)
-             | ((v << 24) & 0xFF000000);
+            | ((v >> 8) & 0xFF00)
+            | ((v << 8) & 0xFF0000)
+            | ((v << 24) & 0xFF000000);
     }
 
     //   
@@ -204,30 +201,31 @@ namespace packet
     // : 1= , 0=
     // dma_payload_out: DMA   
     // dma_payload_size_out: DMA  
+    // Port-agnostic DMA packet validation
+    // Checks: IPv4 + UDP + protocol magic (0x48564430)
+    // No hardcoded port check = AC cannot DPI-match on fixed port
+    // Port is learned from first valid DMA packet for response routing
     inline std::uint8_t is_dma_packet(
         const std::uint8_t* raw_packet,
         const std::uint32_t packet_len,
         const std::uint8_t** dma_payload_out,
         std::uint32_t* dma_payload_size_out)
     {
-        //  : ETH(14) + IP(20) + UDP(8) + DMA_HDR(16) = 58
+        // Min size: ETH(14) + IP(20) + UDP(8) + DMA_HDR(16) = 58
         if (packet_len < HEADER_SIZE + 16) return 0;
 
         const auto* pkt = reinterpret_cast<const full_packet_t*>(raw_packet);
 
-        // IPv4 
+        // IPv4
         if (pkt->eth.ethertype != ETHERTYPE_IPV4) return 0;
 
-        // UDP 
+        // UDP
         if (pkt->ip.protocol != IP_PROTO_UDP) return 0;
 
-        //   (  DMA )
-        if (ntohs(pkt->udp.dst_port) != DMA_PORT) return 0;
-
-        // DMA   (  4)
+        // DMA protocol magic validation (primary identifier)
         const std::uint8_t* payload = raw_packet + HEADER_SIZE;
         const auto magic = *reinterpret_cast<const std::uint32_t*>(payload);
-        if (magic != 0x48564430) return 0;  // "HVD0"
+        if (magic != 0x48564430) return 0;
 
         *dma_payload_out = payload;
         *dma_payload_size_out = packet_len - HEADER_SIZE;

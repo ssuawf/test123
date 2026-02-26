@@ -197,6 +197,7 @@
     <ClInclude Include="src\crt\crt.h" />
     <ClInclude Include="src\dma\dma_protocol.h" />
     <ClInclude Include="src\dma\dma_handler.h" />
+    <ClInclude Include="src\mmio_intercept.h" />
     <ClInclude Include="src\network\network.h" />
     <ClInclude Include="src\network\nic.h" />
     <ClInclude Include="src\network\packet.h" />

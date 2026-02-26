@@ -149,6 +149,9 @@
     <ClInclude Include="src\slat\hook\hook_entry.h">
       <Filter>Header Files</Filter>
     </ClInclude>
+    <ClInclude Include="src\mmio_intercept.h">
+      <Filter>Header Files</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <MASM Include="src\slat\cr3\intel_invept.asm">

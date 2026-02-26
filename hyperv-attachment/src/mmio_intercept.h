@@ -1,4 +1,34 @@
-#pragma once
+﻿#pragma once
+
+// ============================================================================
+// MMIO Intercept - Shadow Page Swap (Production)
+// ============================================================================
+// AMD SVM only. Intel EPT uses handle_txq_mmio_violation() in main.cpp
+//
+// Protects ONE NIC MMIO page via NPT present=0:
+//
+// Stats Page (BAR0+0x4000): Hide Q1 TX/RX packet/byte counts
+//    - All access -> shadow page with adjusted stats (2 VMEXIT)
+//    - GPTC/TPT: subtract hv_tx_interval_packets
+//    - GOTCL/TOTL: subtract hv_tx_interval_bytes
+//    - GPRC/GORCL: subtract hv_rx_interval_packets/bytes
+//    - OS stats polling ~2sec interval = negligible overhead (~0.5 NPF/sec)
+//
+// TXQ Page (BAR0+0xE000): NOT intercepted (performance fix)
+//    - Q0-Q3 TX regs share same 4KB -> OS Q0 TDT write = 2 VMEXITs each
+//    - No current AC enumerates TX queue configurations
+//    - Q1 visible to guest but functionally harmless
+//
+// Intel I225-V stats are Clear-On-Read (COR):
+//   Our NPF handler reads real HW (clears HW counter),
+//   subtracts Q1 contribution, writes adjusted value to shadow.
+//   Guest reads shadow (not COR), so no double-clear issue.
+//
+// State machine: IDLE -> STEPPING_STATS -> IDLE
+// ============================================================================
+
+#ifndef _INTELMACHINE
+
 #include <cstdint>
 
 #include "arch/arch.h"
@@ -9,405 +39,335 @@
 #include "slat/cr3/cr3.h"
 #include "slat/cr3/pte.h"
 #include "network/nic.h"
+#include "network/network.h"
 #include "crt/crt.h"
-
-// ============================================================================
-// [핵심] MMIO Intercept — Shadow Page Swap 방식으로 TXQ1 보호
-// ============================================================================
-//
-// [배경] 기존 문제: HV가 TX Q1(0xE040-0xE07F)을 전용 사용하는데,
-//        OS/AC가 NIC 레지스터를 스캔하면 Q1이 active인 게 보임
-//        → "숨겨진 TX 큐가 있다" = DMA 해킹 탐지
-//
-// [해결] NPT(Nested Page Table)에서 BAR0+0xE000 페이지를 보호:
-//        - Q1 write → advance_guest_rip()으로 건너뜀 (HW 안 건드림)
-//        - Q1 read  → Shadow page(Q1=0)에서 읽게 함
-//        - Q0/Q2/Q3 → 실제 HW에 정상 pass-through
-//
-// [왜 Shadow Page Swap?]
-//   VMCB save_state에 RAX만 저장됨 → RCX/RDX 등 GPR 접근 불가
-//   → instruction decode + GPR 에뮬레이션 불가능
-//   → PTE.PFN 교체로 해결 (GPR 안 건드려도 됨!)
-//
-// [데이터 흐름]
-//
-//   AC writes TXDCTL1=0 → NPF → advance_rip → skip (1 VMEXIT)
-//   AC reads TXDCTL1    → NPF → PFN→shadow → guest reads 0 → restore (2 VMEXIT)
-//   OS writes TDT0      → NPF → PFN→real   → guest writes HW → restore (2 VMEXIT)
-//
-//   결과: AC 입장에서 Q1 = disabled/미사용 ✅
-//         실제 HW: Q1 = ENABLE, 우리 큐 정상 ✅
-//
-// [성능]
-//   Q1 접근 (AC 프로빙): 드물어서 무시
-//   Q0 TDT write (OS 패킷): 2 VMEXIT/write ≈ 4μs
-//   5000 pkt/s 기준: 20ms/sec = 2% CPU overhead (허용 범위)
-//
-// [의존성]
-//   arch::get_vmcb(), arch::advance_guest_rip() — VMCB 접근 (기존 API)
-//   slat::get_pte(), slat::hyperv_cr3()         — NPT PTE 조작
-//   heap_manager::allocate_page()               — Shadow page 할당
-//   nic::va_to_gpa()                            — VA→GPA 변환
-//   crt::set_memory()                           — 메모리 초기화
-// ============================================================================
 
 namespace mmio_intercept
 {
     // ========================================================================
-    // [상태 변수]
+    // TXQ Page state (BAR0+0xE000)
     // ========================================================================
+    inline std::uint64_t txq_page_gpa = 0;
+    inline std::uint64_t txq_real_pfn = 0;
+    inline std::uint64_t txq_shadow_gpa = 0;
+    inline void* txq_shadow_va = nullptr;
+    inline slat_pte* txq_cached_pte = nullptr;
 
-    // 보호할 MMIO 페이지 GPA (= BAR0 + 0xE000)
-    // IGC TX Queue 레지스터: Q0(+0x00), Q1(+0x40), Q2(+0x80), Q3(+0xC0)
-    inline std::uint64_t protected_page_gpa = 0;
+    // Q1 offset range within page
+    constexpr std::uint32_t TXQ1_START = 0x40;
+    constexpr std::uint32_t TXQ1_END = 0x80;
 
-    // 실제 MMIO 페이지의 원본 PFN (NPT PTE에서 저장, 복원용)
-    inline std::uint64_t real_mmio_pfn = 0;
+    // ========================================================================
+    // Stats Page state (BAR0+0x4000)
+    // ========================================================================
+    inline std::uint64_t stats_page_gpa = 0;
+    inline std::uint64_t stats_real_pfn = 0;
+    inline std::uint64_t stats_shadow_gpa = 0;
+    inline void* stats_shadow_va = nullptr;
+    inline slat_pte* stats_cached_pte = nullptr;
 
-    // Shadow page: heap에서 할당, Q1 영역만 0으로 유지
-    inline std::uint64_t shadow_page_gpa = 0;
-    inline void*         shadow_page_va  = nullptr;
+    // Intel I225-V TX stats register offsets (within 0x4000 page)
+    // All offsets relative to page base (page_offset = reg - 0x4000)
+    constexpr std::uint32_t GPTC_OFF = 0x080;  // Good Packets TX Count (COR)
+    constexpr std::uint32_t GOTCL_OFF = 0x090;  // Good Octets TX Count Low (COR)
+    constexpr std::uint32_t GOTCH_OFF = 0x094;  // Good Octets TX Count High (COR)
+    constexpr std::uint32_t TPT_OFF = 0x0D4;  // Total Packets TX
+    constexpr std::uint32_t TOTL_OFF = 0x0D0;  // Total Octets TX Low
+    constexpr std::uint32_t TOTH_OFF = 0x0C4;  // Total Octets TX High
 
-    // 활성화 여부
+    // Intel I225-V RX stats register offsets (within 0x4000 page)
+    // Hides DMA packets consumed by HV from Q0 RX counters
+    constexpr std::uint32_t GPRC_OFF = 0x074;  // Good Packets RX Count (COR)
+    constexpr std::uint32_t GORCL_OFF = 0x088;  // Good Octets RX Count Low (COR)
+    constexpr std::uint32_t GORCH_OFF = 0x08C;  // Good Octets RX Count High (COR)
+
+    // ========================================================================
+    // State machine
+    // ========================================================================
     inline std::uint8_t is_active = 0;
 
-    // TXQ1 offset 범위 (page 내 offset)
-    // Q1: TDBAL1=0x40, TDBAH1=0x44, TDLEN1=0x48, TDH1=0x50, TDT1=0x58, TXDCTL1=0x68
-    constexpr std::uint32_t TXQ1_START = 0x40;
-    constexpr std::uint32_t TXQ1_END   = 0x80;
-
-    // ========================================================================
-    // [상태 머신]
-    // ========================================================================
-    // IDLE:     페이지 보호 중 (NPT present=0) → 모든 접근에 NPF 발생
-    // STEPPING: 페이지 일시 노출 (present=1)   → guest 명령어 실행 중
-    //           다음 VMEXIT에서 자동 복원 → IDLE
-    //
-    // [주의] STEPPING에서 1개 이상 명령어 실행될 수 있음
-    //        BUT: MMIO 접근은 uncached라 매우 느림 → 실질적으로 1개만 실행
-    //        그리고 노출된 페이지가 real/shadow이므로 추가 실행 안전
-    // ========================================================================
     enum class state_t : std::uint8_t
     {
         IDLE = 0,
-        STEPPING = 1
+        STEPPING_TXQ = 1,    // TXQ page temporarily exposed
+        STEPPING_STATS = 2   // Stats page temporarily exposed
     };
 
     inline state_t current_state = state_t::IDLE;
 
     // ========================================================================
-    // [진단 카운터] — CPUID probe로 조회 (leaf 0x485652D0-D7)
-    // ========================================================================
-    inline volatile std::uint32_t dbg_q1_write_dropped = 0;   // Q1 write 드롭
-    inline volatile std::uint32_t dbg_q1_read_shadowed = 0;   // Q1 read → shadow
-    inline volatile std::uint32_t dbg_passthrough = 0;         // non-Q1 pass-through
-    inline volatile std::uint32_t dbg_step_restore = 0;        // STEPPING→IDLE 복원
-    inline volatile std::uint32_t dbg_last_offset = 0;         // 마지막 NPF offset
-    inline volatile std::uint8_t  dbg_last_was_write = 0;
-    inline volatile std::uint8_t  dbg_last_was_q1 = 0;
-    inline volatile std::uint32_t dbg_setup_result = 0;        // set_up 결과 코드
-
-    // ========================================================================
-    // [NPT PTE 조작]
+    // NPT PTE helpers
     // ========================================================================
 
-    // 캐시된 PTE 포인터 (매 VMEXIT마다 page walk 안 하게)
-    inline slat_pte* cached_pte = nullptr;
-
-    inline slat_pte* get_mmio_pte()
+    inline slat_pte* get_pte_for(std::uint64_t gpa, slat_pte*& cache)
     {
-        if (cached_pte)
-            return cached_pte;
-
-        virtual_address_t va = { .flags = protected_page_gpa };
-        cached_pte = slat::get_pte(slat::hyperv_cr3(), va, 1);
-        return cached_pte;
+        if (cache) return cache;
+        virtual_address_t va;
+        va.address = gpa;
+        cache = slat::get_pte(slat::hyperv_cr3(), va, 1);
+        return cache;
     }
 
-    // present=0: 모든 guest 접근에 NPF
-    inline void protect_page()
+    inline void protect(slat_pte* pte)
     {
-        slat_pte* pte = get_mmio_pte();
         if (!pte) return;
-
         pte->present = 0;
-
-        // [핵심] TLB flush — NPT 변경사항을 즉시 반영
-        // flush 안 하면 TLB에 캐시된 이전 매핑으로 접근될 수 있음
         vmcb_t* vmcb = arch::get_vmcb();
         vmcb->control.tlb_control = tlb_control_t::flush_guest_tlb_entries;
     }
 
-    // present=1 + 지정 PFN: guest가 해당 물리 페이지에 접근 가능
-    inline void unprotect_page_with_pfn(std::uint64_t pfn)
+    inline void expose_pfn(slat_pte* pte, std::uint64_t pfn)
     {
-        slat_pte* pte = get_mmio_pte();
         if (!pte) return;
-
         pte->page_frame_number = pfn;
         pte->present = 1;
         pte->write = 1;
-
         vmcb_t* vmcb = arch::get_vmcb();
         vmcb->control.tlb_control = tlb_control_t::flush_guest_tlb_entries;
     }
 
     // ========================================================================
-    // [Shadow Page 갱신]
+    // TXQ Shadow Page refresh (same as before)
     // ========================================================================
-    // Q1 read NPF 발생 시에만 호출 → 성능 영향 최소 (AC 프로빙은 드물게)
-    // real MMIO 전체 복사 후 Q1(0x40-0x7F) 영역만 0으로 덮음
-    // ========================================================================
-
-    inline void refresh_shadow_page()
+    inline void refresh_txq_shadow()
     {
-        if (!shadow_page_va || !nic::state.mmio_base_gpa)
-            return;
+        if (!txq_shadow_va || txq_real_pfn == 0) return;
 
-        // real MMIO 페이지를 host VA로 매핑 (HV 접근은 NPT 보호 안 받음)
-        void* real_mmio_va = memory_manager::map_host_physical(protected_page_gpa);
-        if (!real_mmio_va)
-            return;
+        void* real_va = memory_manager::map_host_physical(txq_real_pfn << 12);
+        if (!real_va) return;
 
-        auto* shadow = static_cast<std::uint32_t*>(shadow_page_va);
-        auto* real   = static_cast<volatile std::uint32_t*>(real_mmio_va);
+        auto* shadow = static_cast<std::uint32_t*>(txq_shadow_va);
+        auto* real = static_cast<volatile std::uint32_t*>(real_va);
 
-        // Q0 (0x00-0x3F): 실제 값 복사 — OS 드라이버가 읽어도 정상
-        for (std::uint32_t i = 0; i < 16; i++)
-            shadow[i] = real[i];
-
-        // Q1 (0x40-0x7F): 전부 0! — AC에게 "Q1 미사용" 보여줌
-        for (std::uint32_t i = 16; i < 32; i++)
-            shadow[i] = 0;
-
-        // Q2 (0x80-0xBF): 실제 값 복사
-        for (std::uint32_t i = 32; i < 48; i++)
-            shadow[i] = real[i];
-
-        // Q3 (0xC0-0xFF): 실제 값 복사
-        for (std::uint32_t i = 48; i < 64; i++)
-            shadow[i] = real[i];
-
-        // 0x100-0xFFF: 나머지 영역 (TX stat 등) — 실제 값 복사
-        // 256 bytes(=64 DWORDs) 이후 영역. 페이지 전체 1024 DWORDs
-        for (std::uint32_t i = 64; i < 1024; i++)
-            shadow[i] = real[i];
+        // Q0 (0x00-0x3F): real values
+        for (std::uint32_t i = 0; i < 16; i++) shadow[i] = real[i];
+        // Q1 (0x40-0x7F): zeros (AC sees "not configured")
+        for (std::uint32_t i = 16; i < 32; i++) shadow[i] = 0;
+        // Q2-Q3 + rest: real values
+        for (std::uint32_t i = 32; i < 1024; i++) shadow[i] = real[i];
     }
 
     // ========================================================================
-    // [핵심] NPF 핸들러 — VMEXIT에서 호출
+    // Stats Shadow Page refresh
     // ========================================================================
-    //
-    // 반환값: 1 = handled (premature return 해야 함)
-    //         0 = 우리 페이지 아님 (다른 handler로 전달)
-    //
-    // 호출 위치: vmexit_handler_detour() → is_slat_violation 체크 시
+    // Reads real NIC stats (COR: clears HW counters on read),
+    // subtracts Q1 TX contribution tracked by network::hv_tx_interval_*,
+    // writes adjusted values to shadow page.
+    // Guest reads shadow = sees only OS traffic.
+    // Called on every stats page NPF (~every 2 seconds).
     // ========================================================================
+    inline void refresh_stats_shadow()
+    {
+        if (!stats_shadow_va || stats_real_pfn == 0) return;
 
+        void* real_va = memory_manager::map_host_physical(stats_real_pfn << 12);
+        if (!real_va) return;
+
+        auto* shadow = static_cast<volatile std::uint32_t*>(stats_shadow_va);
+        auto* real = static_cast<volatile std::uint32_t*>(real_va);
+
+        // Snapshot Q1 TX contribution before reading HW (atomic-ish)
+        const std::uint32_t hv_pkts = network::hv_tx_interval_packets;
+        const std::uint64_t hv_bytes = network::hv_tx_interval_bytes;
+
+        // Snapshot HV-consumed RX contribution
+        const std::uint32_t hv_rx_pkts = network::hv_rx_interval_packets;
+        const std::uint64_t hv_rx_bytes = network::hv_rx_interval_bytes;
+
+        // Copy ALL stats from real HW to shadow (COR: this clears HW counters!)
+        // Full page copy ensures we capture everything including RX stats
+        for (std::uint32_t i = 0; i < 1024; i++)
+            shadow[i] = real[i];
+
+        // Now adjust TX counters in shadow by subtracting Q1 contribution
+        // Clamp to 0 to handle edge cases (timing, rollover)
+
+        // GPTC: Good Packets Transmitted Count
+        std::uint32_t gptc = shadow[GPTC_OFF / 4];
+        shadow[GPTC_OFF / 4] = (gptc > hv_pkts) ? (gptc - hv_pkts) : 0;
+
+        // TPT: Total Packets Transmitted
+        std::uint32_t tpt = shadow[TPT_OFF / 4];
+        shadow[TPT_OFF / 4] = (tpt > hv_pkts) ? (tpt - hv_pkts) : 0;
+
+        // GOTCL/GOTCH: Good Octets Transmitted (64-bit)
+        std::uint64_t gotc =
+            static_cast<std::uint64_t>(shadow[GOTCL_OFF / 4]) |
+            (static_cast<std::uint64_t>(shadow[GOTCH_OFF / 4]) << 32);
+        std::uint64_t adj_gotc = (gotc > hv_bytes) ? (gotc - hv_bytes) : 0;
+        shadow[GOTCL_OFF / 4] = static_cast<std::uint32_t>(adj_gotc);
+        shadow[GOTCH_OFF / 4] = static_cast<std::uint32_t>(adj_gotc >> 32);
+
+        // TOTL/TOTH: Total Octets Transmitted (64-bit)
+        std::uint64_t tot =
+            static_cast<std::uint64_t>(shadow[TOTL_OFF / 4]) |
+            (static_cast<std::uint64_t>(shadow[TOTH_OFF / 4]) << 32);
+        std::uint64_t adj_tot = (tot > hv_bytes) ? (tot - hv_bytes) : 0;
+        shadow[TOTL_OFF / 4] = static_cast<std::uint32_t>(adj_tot);
+        shadow[TOTH_OFF / 4] = static_cast<std::uint32_t>(adj_tot >> 32);
+
+        // Adjust RX counters — hide DMA packets consumed by HV from Q0
+        // Prevents AC from detecting "NIC GPRC > OS socket RX count" mismatch
+
+        // GPRC: Good Packets Received Count
+        std::uint32_t gprc = shadow[GPRC_OFF / 4];
+        shadow[GPRC_OFF / 4] = (gprc > hv_rx_pkts) ? (gprc - hv_rx_pkts) : 0;
+
+        // GORCL/GORCH: Good Octets Received Count (64-bit)
+        std::uint64_t gorc =
+            static_cast<std::uint64_t>(shadow[GORCL_OFF / 4]) |
+            (static_cast<std::uint64_t>(shadow[GORCH_OFF / 4]) << 32);
+        std::uint64_t adj_gorc = (gorc > hv_rx_bytes) ? (gorc - hv_rx_bytes) : 0;
+        shadow[GORCL_OFF / 4] = static_cast<std::uint32_t>(adj_gorc);
+        shadow[GORCH_OFF / 4] = static_cast<std::uint32_t>(adj_gorc >> 32);
+
+        // Reset all interval counters (we've accounted for this interval)
+        network::hv_tx_interval_packets = 0;
+        network::hv_tx_interval_bytes = 0;
+        network::hv_rx_interval_packets = 0;
+        network::hv_rx_interval_bytes = 0;
+    }
+
+    // ========================================================================
+    // NPF handler - called from VMEXIT
+    // ========================================================================
+    // Stats page only. TXQ page (0xE000) is not intercepted (perf fix).
+    // ========================================================================
     inline std::uint8_t handle_npf()
     {
-        if (!is_active)
-            return 0;
+        if (!is_active) return 0;
 
-        // ---- VMCB에서 NPF 정보 추출 ----
         vmcb_t* vmcb = arch::get_vmcb();
 
-        const npf_exit_info_1 info1 = { .flags = vmcb->control.first_exit_info };
+        npf_exit_info_1 info1;
+        info1.flags = vmcb->control.first_exit_info;
         const std::uint64_t faulting_gpa = vmcb->control.second_exit_info;
-
-        // ---- 우리 페이지인지 확인 ----
         const std::uint64_t page_gpa = faulting_gpa & ~0xFFFull;
-        if (page_gpa != protected_page_gpa)
-            return 0;
 
-        // Page 내 offset (0x000 ~ 0xFFF)
-        const std::uint32_t offset =
-            static_cast<std::uint32_t>(faulting_gpa & 0xFFF);
-
-        const bool is_write = (info1.write_access == 1);
-        const bool is_q1 = (offset >= TXQ1_START && offset < TXQ1_END);
-
-        // 진단
-        dbg_last_offset = offset;
-        dbg_last_was_write = is_write ? 1 : 0;
-        dbg_last_was_q1 = is_q1 ? 1 : 0;
-
-        // ================================================================
-        // CASE 1: Q1 + Write → 드롭! (1 VMEXIT, 가장 빠름)
-        // ================================================================
-        //
-        // [원리] advance_guest_rip()로 명령어 건너뜀
-        //        NRIP_SAVE 활성 → vmcb->control.next_rip 사용 → 정확
-        //
-        // 예: guest "mov [rax+0xE068], ecx" 실행 시도
-        //     → NPF → advance_rip → 다음 명령어로 점프
-        //     → ecx 값은 HW에 안 써짐
-        //     → AC가 read-back하면 shadow에서 0 반환
-        //
-        // [GPR 영향] 없음! write 명령어의 source GPR 안 건드림
-        //            그냥 실행 안 하고 skip할 뿐
-        // ================================================================
-        if (is_q1 && is_write)
+        // ---- Stats Page (BAR0+0x4000) ----
+        // ~0.5 NPF/sec (igc driver reads stats every 2 seconds)
+        if (page_gpa == stats_page_gpa)
         {
-            arch::advance_guest_rip();
-            dbg_q1_write_dropped++;
+            // All stats access goes through shadow (read or write)
+            // Refresh shadow with adjusted TX/RX stats
+            refresh_stats_shadow();
+            expose_pfn(stats_cached_pte, stats_shadow_gpa >> 12);
+            current_state = state_t::STEPPING_STATS;
             return 1;
         }
 
-        // ================================================================
-        // CASE 2: Q1 + Read → Shadow page 노출 (2 VMEXIT)
-        // ================================================================
-        //
-        // [원리] PFN을 shadow page로 교체 → present=1
-        //        → VMRESUME → guest가 shadow에서 Q1=0 읽음
-        //        → 다음 VMEXIT → check_and_restore()에서 present=0 복원
-        //
-        // [왜 pass-through 안 하고 shadow?]
-        //   pass-through하면 실제 HW 값(ENABLE 등)이 보임
-        //   shadow에서 읽으면 0 → "Q1 미사용" ✅
-        // ================================================================
-        if (is_q1 && !is_write)
-        {
-            refresh_shadow_page();
-
-            std::uint64_t shadow_pfn = shadow_page_gpa >> 12;
-            unprotect_page_with_pfn(shadow_pfn);
-
-            current_state = state_t::STEPPING;
-            dbg_q1_read_shadowed++;
-            return 1;
-        }
-
-        // ================================================================
-        // CASE 3: Non-Q1 → Real MMIO pass-through (2 VMEXIT)
-        // ================================================================
-        //
-        // [원리] PFN을 원래 MMIO PFN으로 설정 → present=1
-        //        → VMRESUME → guest가 실제 HW 접근 (정상)
-        //        → 다음 VMEXIT → check_and_restore()에서 present=0 복원
-        //
-        // OS가 TDT0 write → 여기 → 실제 HW에 쓰임 → 패킷 전송 정상 ✅
-        // OS가 RDH0 read  → 여기 → 실제 HW에서 읽힘 → 수신 정상 ✅
-        // ================================================================
-        unprotect_page_with_pfn(real_mmio_pfn);
-
-        current_state = state_t::STEPPING;
-        dbg_passthrough++;
-        return 1;
+        return 0;
     }
 
     // ========================================================================
-    // [핵심] STEPPING 복원 — 매 VMEXIT 초반에 호출
+    // STEPPING restore - called at top of every VMEXIT
     // ========================================================================
-    //
-    // handle_npf()가 페이지를 일시 노출한 후, 다음 VMEXIT에서 복원해야 함
-    // 이 VMEXIT는 NPF가 아닐 수 있음 (CPUID, NMI 등) → 별도 체크 필요
-    //
-    // 호출 위치: vmexit_handler_detour() 최상단, exit_reason 체크 전
-    //
-    // 반환값: 0 항상 (이건 premature return 안 함 — VMEXIT 처리 계속)
-    //         복원만 하고 나머지 handler는 정상 진행
+    // Stats page only. No TXQ stepping needed (page not intercepted).
     // ========================================================================
-
     inline std::uint8_t check_and_restore()
     {
-        if (!is_active || current_state != state_t::STEPPING)
-            return 0;
+        if (!is_active) return 0;
 
-        protect_page();
-        current_state = state_t::IDLE;
-        dbg_step_restore++;
-        return 0;  // VMEXIT 처리 계속 진행 (premature return 아님)
+        if (current_state == state_t::STEPPING_STATS)
+        {
+            protect(stats_cached_pte);
+            current_state = state_t::IDLE;
+        }
+
+        return 0;
     }
 
     // ========================================================================
-    // [초기화] — network::set_up() 이후 호출
+    // Helper: protect a single page via NPT
     // ========================================================================
-    //
-    // 순서:
-    //   1. IGC NIC 확인
-    //   2. Shadow page 할당 (heap 4KB)
-    //   3. NPT PTE 찾기 + 원본 PFN 저장
-    //   4. 2MB large page → 4KB split (필요 시)
-    //   5. PTE present=0 설정 → 보호 시작
-    //
-    // [주의] BAR0가 확정된 후에만 호출 (network::set_up 완료 후)
-    //        heap이 초기화된 후에만 호출 (heap_manager::set_up 완료 후)
-    // ========================================================================
-
-    inline std::uint8_t set_up()
+    static inline std::uint8_t protect_page_gpa(
+        std::uint64_t gpa,
+        std::uint64_t& out_real_pfn,
+        slat_pte*& out_cached_pte)
     {
-        // IGC NIC만 지원 (I225-V, I226-V)
-        if (nic::state.nic_type != nic::nic_type_t::INTEL ||
-            nic::state.intel_gen != nic::intel_gen_t::IGC)
-        {
-            is_active = 0;
-            dbg_setup_result = 1;  // not IGC
-            return 0;
-        }
-
-        if (nic::state.mmio_base_gpa == 0)
-        {
-            is_active = 0;
-            dbg_setup_result = 2;  // no BAR0
-            return 0;
-        }
-
-        // 보호할 페이지 GPA = BAR0 + 0xE000 (TX queue register page)
-        protected_page_gpa = nic::state.mmio_base_gpa + 0xE000;
-
-        // ---- Shadow page 할당 ----
-        shadow_page_va = heap_manager::allocate_page();
-        if (!shadow_page_va)
-        {
-            is_active = 0;
-            dbg_setup_result = 3;  // heap alloc fail
-            return 0;
-        }
-
-        // Shadow page GPA 계산
-        if (!nic::heap_va_pa_valid)
-        {
-            is_active = 0;
-            dbg_setup_result = 4;  // VA→PA not ready
-            return 0;
-        }
-        shadow_page_gpa = nic::va_to_gpa(shadow_page_va);
-
-        // Shadow page 초기화 (전부 0)
-        crt::set_memory(shadow_page_va, 0, 4096);
-
-        // ---- NPT PTE 찾기 ----
-        // force_split=1: 2MB large page면 4KB로 자동 분할
-        virtual_address_t va = { .flags = protected_page_gpa };
+        virtual_address_t va;
+        va.address = gpa;
         std::uint8_t split_state = 0;
         slat_pte* pte = slat::get_pte(
             slat::hyperv_cr3(), va, 1, &split_state);
 
-        if (!pte)
-        {
-            is_active = 0;
-            dbg_setup_result = 5;  // PTE not found
-            return 0;
-        }
+        if (!pte) return 0;
 
-        // 원본 PFN 저장 (real MMIO pass-through 복원용)
-        real_mmio_pfn = pte->page_frame_number;
-        cached_pte = pte;
+        out_real_pfn = pte->page_frame_number;
+        out_cached_pte = pte;
 
-        // ---- 보호 시작: present=0 ----
         pte->present = 0;
 
-        // TLB flush + VMCB clean bit 클리어
         vmcb_t* vmcb = arch::get_vmcb();
         vmcb->control.tlb_control = tlb_control_t::flush_guest_tlb_entries;
         vmcb->control.clean.nested_paging = 0;
 
+        return 1;
+    }
+
+    // ========================================================================
+    // Initialization - call AFTER network::set_up()
+    // ========================================================================
+    // [PERF FIX] Only stats page (0x4000) is intercepted.
+    // TXQ page (0xE000) protection REMOVED:
+    //   Q0-Q3 TX regs share same 4KB page. OS writes Q0 TDT constantly
+    //   -> 2 VMEXITs per write -> system-wide performance degradation.
+    //   No current AC (VGK/EAC/BE) enumerates TX queue configurations.
+    //   Re-add if future AC detection vector emerges.
+    //
+    // Stats page (0x4000) interception is nearly free:
+    //   igc driver reads stats ~once per 2 seconds -> ~0.5 NPF/sec.
+    //   Hides Q1 TX packet/byte counts from GPTC/GOTC/TPT/TOT.
+    //   Hides HV-consumed RX counts from GPRC/GORC.
+    // ========================================================================
+    inline std::uint8_t set_up()
+    {
+        // IGC NIC only (I225-V, I226-V)
+        if (nic::state.nic_type != nic::nic_type_t::INTEL ||
+            nic::state.intel_gen != nic::intel_gen_t::IGC)
+        {
+            is_active = 0;
+            return 0;
+        }
+
+        if (nic::state.mmio_base_gpa == 0 || !nic::heap_va_pa_valid)
+        {
+            is_active = 0;
+            return 0;
+        }
+
+        // ---- Allocate shadow page for stats only ----
+        stats_shadow_va = heap_manager::allocate_page();
+        if (!stats_shadow_va)
+        {
+            is_active = 0;
+            return 0;
+        }
+
+        stats_shadow_gpa = nic::va_to_gpa(stats_shadow_va);
+        crt::set_memory(stats_shadow_va, 0, 4096);
+
+        // ---- Page GPAs ----
+        stats_page_gpa = nic::state.mmio_base_gpa + 0x4000;
+
+        // ---- TXQ page (0xE000): NO protection ----
+        // Q0 TDT writes cause devastating NPF overhead.
+        // HV accesses Q1 regs via normal map_guest_physical (page is present).
+        // No mmio_bypass needed since NPT present=1 for this page.
+
+        // ---- Protect Stats page only ----
+        if (!protect_page_gpa(stats_page_gpa, stats_real_pfn, stats_cached_pte))
+        {
+            is_active = 0;
+            return 0;
+        }
+
         current_state = state_t::IDLE;
         is_active = 1;
-        dbg_setup_result = 0xFF;  // success
 
         return 1;
     }
 
 } // namespace mmio_intercept
+
+#endif // !_INTELMACHINE

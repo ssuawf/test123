@@ -3,16 +3,40 @@
   "WorkspaceRootPath": "C:\\Users\\owo\\Desktop\\hyperdma\\",
   "Documents": [
     {
-      "AbsoluteMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\slat\\violation\\violation.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
-      "RelativeMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|solutionrelative:hyperv-attachment\\src\\slat\\violation\\violation.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
-    },
-    {
       "AbsoluteMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\main.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
       "RelativeMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|solutionrelative:hyperv-attachment\\src\\main.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
     },
     {
       "AbsoluteMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\network.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
       "RelativeMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|solutionrelative:hyperv-attachment\\src\\network\\network.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\mmio_intercept.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|solutionrelative:hyperv-attachment\\src\\mmio_intercept.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\dma\\dma_protocol.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|solutionrelative:hyperv-attachment\\src\\dma\\dma_protocol.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\ip_frag.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|solutionrelative:hyperv-attachment\\src\\network\\ip_frag.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A8C03EEB-3FE7-4EAB-B1F8-273A441BC8B9}|uefi-boot\\uefi-boot.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\main.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{A8C03EEB-3FE7-4EAB-B1F8-273A441BC8B9}|uefi-boot\\uefi-boot.vcxproj|solutionrelative:uefi-boot\\src\\main.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\ext\\ia32-doc\\ia32.hpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|solutionrelative:hyperv-attachment\\ext\\ia32-doc\\ia32.hpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A8C03EEB-3FE7-4EAB-B1F8-273A441BC8B9}|uefi-boot\\uefi-boot.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\ext\\ia32-doc\\ia32_compact.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{A8C03EEB-3FE7-4EAB-B1F8-273A441BC8B9}|uefi-boot\\uefi-boot.vcxproj|solutionrelative:uefi-boot\\ext\\ia32-doc\\ia32_compact.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A8C03EEB-3FE7-4EAB-B1F8-273A441BC8B9}|uefi-boot\\uefi-boot.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\disk\\disk.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{A8C03EEB-3FE7-4EAB-B1F8-273A441BC8B9}|uefi-boot\\uefi-boot.vcxproj|solutionrelative:uefi-boot\\src\\disk\\disk.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
     },
     {
       "AbsoluteMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\nic.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
@@ -23,8 +47,40 @@
       "RelativeMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|solutionrelative:hyperv-attachment\\src\\network\\network.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
     },
     {
-      "AbsoluteMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\dma\\dma_protocol.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
-      "RelativeMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|solutionrelative:hyperv-attachment\\src\\dma\\dma_protocol.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+      "AbsoluteMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\packet.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|solutionrelative:hyperv-attachment\\src\\network\\packet.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A8C03EEB-3FE7-4EAB-B1F8-273A441BC8B9}|uefi-boot\\uefi-boot.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\bootmgfw\\bootmgfw.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{A8C03EEB-3FE7-4EAB-B1F8-273A441BC8B9}|uefi-boot\\uefi-boot.vcxproj|solutionrelative:uefi-boot\\src\\bootmgfw\\bootmgfw.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A8C03EEB-3FE7-4EAB-B1F8-273A441BC8B9}|uefi-boot\\uefi-boot.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\hyperv_attachment\\hyperv_attachment.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{A8C03EEB-3FE7-4EAB-B1F8-273A441BC8B9}|uefi-boot\\uefi-boot.vcxproj|solutionrelative:uefi-boot\\src\\hyperv_attachment\\hyperv_attachment.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A8C03EEB-3FE7-4EAB-B1F8-273A441BC8B9}|uefi-boot\\uefi-boot.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\hvloader\\hvloader.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{A8C03EEB-3FE7-4EAB-B1F8-273A441BC8B9}|uefi-boot\\uefi-boot.vcxproj|solutionrelative:uefi-boot\\src\\hvloader\\hvloader.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A8C03EEB-3FE7-4EAB-B1F8-273A441BC8B9}|uefi-boot\\uefi-boot.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\hooks\\hooks.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{A8C03EEB-3FE7-4EAB-B1F8-273A441BC8B9}|uefi-boot\\uefi-boot.vcxproj|solutionrelative:uefi-boot\\src\\hooks\\hooks.c||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A8C03EEB-3FE7-4EAB-B1F8-273A441BC8B9}|uefi-boot\\uefi-boot.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\bootmgfw\\bootmgfw.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{A8C03EEB-3FE7-4EAB-B1F8-273A441BC8B9}|uefi-boot\\uefi-boot.vcxproj|solutionrelative:uefi-boot\\src\\bootmgfw\\bootmgfw.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{A8C03EEB-3FE7-4EAB-B1F8-273A441BC8B9}|uefi-boot\\uefi-boot.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\hyperv_attachment\\hyperv_attachment.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{A8C03EEB-3FE7-4EAB-B1F8-273A441BC8B9}|uefi-boot\\uefi-boot.vcxproj|solutionrelative:uefi-boot\\src\\hyperv_attachment\\hyperv_attachment.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\memory_manager\\memory_manager.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|solutionrelative:hyperv-attachment\\src\\memory_manager\\memory_manager.h||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
+    },
+    {
+      "AbsoluteMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\slat\\violation\\violation.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
+      "RelativeMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|solutionrelative:hyperv-attachment\\src\\slat\\violation\\violation.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}"
     },
     {
       "AbsoluteMoniker": "D:0:0:{13A77C37-9BB2-445D-8E81-9687E455C2E6}|hyperv-attachment\\hyperv-attachment.vcxproj|C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\dma\\dma_handler.cpp||{D0E1A5C6-B359-4E41-9B60-3365922C2A22}",
@@ -41,36 +97,229 @@
       "DocumentGroups": [
         {
           "DockedWidth": 200,
-          "SelectedChildIndex": 0,
+          "SelectedChildIndex": 8,
           "Children": [
             {
               "$type": "Document",
-              "DocumentIndex": 0,
-              "Title": "violation.cpp",
-              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\slat\\violation\\violation.cpp",
-              "RelativeDocumentMoniker": "hyperv-attachment\\src\\slat\\violation\\violation.cpp",
-              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\slat\\violation\\violation.cpp",
-              "RelativeToolTip": "hyperv-attachment\\src\\slat\\violation\\violation.cpp",
-              "ViewState": "AgIAADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
-              "WhenOpened": "2026-02-24T00:37:36.887Z",
-              "EditorCaption": ""
-            },
-            {
-              "$type": "Document",
               "DocumentIndex": 7,
-              "Title": "ammintrin.h",
-              "DocumentMoniker": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\include\\ammintrin.h",
-              "RelativeDocumentMoniker": "..\\..\\..\\..\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\include\\ammintrin.h",
-              "ToolTip": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\include\\ammintrin.h",
-              "RelativeToolTip": "..\\..\\..\\..\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\include\\ammintrin.h",
-              "ViewState": "AgIAAKsAAAAAAAAAAAApwBsBAAAnAAAAAAAAAA==",
+              "Title": "ia32_compact.h",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\ext\\ia32-doc\\ia32_compact.h",
+              "RelativeDocumentMoniker": "uefi-boot\\ext\\ia32-doc\\ia32_compact.h",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\ext\\ia32-doc\\ia32_compact.h",
+              "RelativeToolTip": "uefi-boot\\ext\\ia32-doc\\ia32_compact.h",
+              "ViewState": "AgIAAHQVAAAAAAAAAAASwIkVAAAJAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
-              "WhenOpened": "2026-02-22T16:58:31.995Z"
+              "WhenOpened": "2026-02-26T18:36:57.667Z"
             },
             {
               "$type": "Document",
               "DocumentIndex": 6,
+              "Title": "ia32.hpp",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\ext\\ia32-doc\\ia32.hpp",
+              "RelativeDocumentMoniker": "hyperv-attachment\\ext\\ia32-doc\\ia32.hpp",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\ext\\ia32-doc\\ia32.hpp",
+              "RelativeToolTip": "hyperv-attachment\\ext\\ia32-doc\\ia32.hpp",
+              "ViewState": "AgIAAD0FAAAAAAAAAAASwFsFAAA3AAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
+              "WhenOpened": "2026-02-26T18:36:46.157Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 8,
+              "Title": "disk.c",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\disk\\disk.c",
+              "RelativeDocumentMoniker": "uefi-boot\\src\\disk\\disk.c",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\disk\\disk.c",
+              "RelativeToolTip": "uefi-boot\\src\\disk\\disk.c",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAEAAAAJAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000423|",
+              "WhenOpened": "2026-02-26T18:36:11.899Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 16,
+              "Title": "bootmgfw.h",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\bootmgfw\\bootmgfw.h",
+              "RelativeDocumentMoniker": "uefi-boot\\src\\bootmgfw\\bootmgfw.h",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\bootmgfw\\bootmgfw.h",
+              "RelativeToolTip": "uefi-boot\\src\\bootmgfw\\bootmgfw.h",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
+              "WhenOpened": "2026-02-26T16:51:47.422Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 12,
+              "Title": "bootmgfw.c",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\bootmgfw\\bootmgfw.c",
+              "RelativeDocumentMoniker": "uefi-boot\\src\\bootmgfw\\bootmgfw.c",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\bootmgfw\\bootmgfw.c",
+              "RelativeToolTip": "uefi-boot\\src\\bootmgfw\\bootmgfw.c",
+              "ViewState": "AgIAALAAAAAAAAAAAAAkwNoAAAABAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000423|",
+              "WhenOpened": "2026-02-26T16:51:41.94Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 17,
+              "Title": "hyperv_attachment.h",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\hyperv_attachment\\hyperv_attachment.h",
+              "RelativeDocumentMoniker": "uefi-boot\\src\\hyperv_attachment\\hyperv_attachment.h",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\hyperv_attachment\\hyperv_attachment.h",
+              "RelativeToolTip": "uefi-boot\\src\\hyperv_attachment\\hyperv_attachment.h",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAABYAAABFAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
+              "WhenOpened": "2026-02-26T09:44:04.458Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 13,
+              "Title": "hyperv_attachment.c",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\hyperv_attachment\\hyperv_attachment.c",
+              "RelativeDocumentMoniker": "uefi-boot\\src\\hyperv_attachment\\hyperv_attachment.c",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\hyperv_attachment\\hyperv_attachment.c",
+              "RelativeToolTip": "uefi-boot\\src\\hyperv_attachment\\hyperv_attachment.c",
+              "ViewState": "AgIAABYBAAAAAAAAAAAiwC4BAAABAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000423|",
+              "WhenOpened": "2026-02-26T09:43:04.61Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 2,
+              "Title": "mmio_intercept.h",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\mmio_intercept.h",
+              "RelativeDocumentMoniker": "hyperv-attachment\\src\\mmio_intercept.h",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\mmio_intercept.h",
+              "RelativeToolTip": "hyperv-attachment\\src\\mmio_intercept.h",
+              "ViewState": "AgIAAEoBAAAAAAAAAAAiwHQBAAAYAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
+              "WhenOpened": "2026-02-24T03:31:36.325Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 0,
+              "Title": "main.cpp",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\main.cpp",
+              "RelativeDocumentMoniker": "hyperv-attachment\\src\\main.cpp",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\main.cpp",
+              "RelativeToolTip": "hyperv-attachment\\src\\main.cpp",
+              "ViewState": "AgIAAB8BAAAAAAAAAAAiwDgBAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
+              "WhenOpened": "2026-02-16T07:58:42.791Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 14,
+              "Title": "hvloader.c",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\hvloader\\hvloader.c",
+              "RelativeDocumentMoniker": "uefi-boot\\src\\hvloader\\hvloader.c",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\hvloader\\hvloader.c",
+              "RelativeToolTip": "uefi-boot\\src\\hvloader\\hvloader.c",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAM8AAAABAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000423|",
+              "WhenOpened": "2026-02-26T09:44:10.655Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 3,
+              "Title": "dma_protocol.h",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\dma\\dma_protocol.h",
+              "RelativeDocumentMoniker": "hyperv-attachment\\src\\dma\\dma_protocol.h",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\dma\\dma_protocol.h",
+              "RelativeToolTip": "hyperv-attachment\\src\\dma\\dma_protocol.h",
+              "ViewState": "AgIAAK0AAAAAAAAAAAAiwNcAAAABAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
+              "WhenOpened": "2026-02-22T08:15:14.467Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 1,
+              "Title": "network.cpp",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\network.cpp",
+              "RelativeDocumentMoniker": "hyperv-attachment\\src\\network\\network.cpp",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\network.cpp",
+              "RelativeToolTip": "hyperv-attachment\\src\\network\\network.cpp",
+              "ViewState": "AgIAAIMIAAAAAAAAAAAiwK0IAAABAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
+              "WhenOpened": "2026-02-16T02:55:02.472Z",
+              "EditorCaption": ""
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 5,
+              "Title": "main.c",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\main.c",
+              "RelativeDocumentMoniker": "uefi-boot\\src\\main.c",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\main.c",
+              "RelativeToolTip": "uefi-boot\\src\\main.c",
+              "ViewState": "AgIAAAMAAAAAAAAAAAAAABwAAAAEAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000423|",
+              "WhenOpened": "2026-02-26T18:36:58.536Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 4,
+              "Title": "ip_frag.h",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\ip_frag.h",
+              "RelativeDocumentMoniker": "hyperv-attachment\\src\\network\\ip_frag.h",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\ip_frag.h",
+              "RelativeToolTip": "hyperv-attachment\\src\\network\\ip_frag.h",
+              "ViewState": "AgIAALQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
+              "WhenOpened": "2026-02-26T18:57:05.143Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 15,
+              "Title": "hooks.c",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\hooks\\hooks.c",
+              "RelativeDocumentMoniker": "uefi-boot\\src\\hooks\\hooks.c",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\uefi-boot\\src\\hooks\\hooks.c",
+              "RelativeToolTip": "uefi-boot\\src\\hooks\\hooks.c",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000423|",
+              "WhenOpened": "2026-02-26T16:51:53.464Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 11,
+              "Title": "packet.h",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\packet.h",
+              "RelativeDocumentMoniker": "hyperv-attachment\\src\\network\\packet.h",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\packet.h",
+              "RelativeToolTip": "hyperv-attachment\\src\\network\\packet.h",
+              "ViewState": "AgIAAMAAAAAAAAAAAAAiwOoAAAABAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
+              "WhenOpened": "2026-02-26T18:04:59.51Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 10,
+              "Title": "network.h",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\network.h",
+              "RelativeDocumentMoniker": "hyperv-attachment\\src\\network\\network.h",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\network.h",
+              "RelativeToolTip": "hyperv-attachment\\src\\network\\network.h",
+              "ViewState": "AgIAAAgAAAAAAAAAAAAAACEAAAAtAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
+              "WhenOpened": "2026-02-16T07:58:48.256Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 9,
+              "Title": "nic.h",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\nic.h",
+              "RelativeDocumentMoniker": "hyperv-attachment\\src\\network\\nic.h",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\nic.h",
+              "RelativeToolTip": "hyperv-attachment\\src\\network\\nic.h",
+              "ViewState": "AgIAAGABAAAAAAAAAAASwHUBAAAtAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
+              "WhenOpened": "2026-02-21T19:24:05.943Z"
+            },
+            {
+              "$type": "Document",
+              "DocumentIndex": 20,
               "Title": "dma_handler.cpp",
               "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\dma\\dma_handler.cpp",
               "RelativeDocumentMoniker": "hyperv-attachment\\src\\dma\\dma_handler.cpp",
@@ -82,64 +331,39 @@
             },
             {
               "$type": "Document",
-              "DocumentIndex": 5,
-              "Title": "dma_protocol.h",
-              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\dma\\dma_protocol.h",
-              "RelativeDocumentMoniker": "hyperv-attachment\\src\\dma\\dma_protocol.h",
-              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\dma\\dma_protocol.h",
-              "RelativeToolTip": "hyperv-attachment\\src\\dma\\dma_protocol.h",
-              "ViewState": "AgIAAIwAAAAAAAAAAAAiwLYAAAABAAAAAAAAAA==",
+              "DocumentIndex": 21,
+              "Title": "ammintrin.h",
+              "DocumentMoniker": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\include\\ammintrin.h",
+              "RelativeDocumentMoniker": "..\\..\\..\\..\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\include\\ammintrin.h",
+              "ToolTip": "C:\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\include\\ammintrin.h",
+              "RelativeToolTip": "..\\..\\..\\..\\Program Files\\Microsoft Visual Studio\\2022\\Community\\VC\\Tools\\MSVC\\14.44.35207\\include\\ammintrin.h",
+              "ViewState": "AgIAAKsAAAAAAAAAAAApwBsBAAAnAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
-              "WhenOpened": "2026-02-22T08:15:14.467Z"
+              "WhenOpened": "2026-02-22T16:58:31.995Z"
             },
             {
               "$type": "Document",
-              "DocumentIndex": 3,
-              "Title": "nic.h",
-              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\nic.h",
-              "RelativeDocumentMoniker": "hyperv-attachment\\src\\network\\nic.h",
-              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\nic.h",
-              "RelativeToolTip": "hyperv-attachment\\src\\network\\nic.h",
-              "ViewState": "AgIAAI8BAAAAAAAAAAAiwLkBAAABAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
-              "WhenOpened": "2026-02-21T19:24:05.943Z"
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 4,
-              "Title": "network.h",
-              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\network.h",
-              "RelativeDocumentMoniker": "hyperv-attachment\\src\\network\\network.h",
-              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\network.h",
-              "RelativeToolTip": "hyperv-attachment\\src\\network\\network.h",
-              "ViewState": "AgIAAJ0AAAAAAAAAAAAiwL4AAAAAAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
-              "WhenOpened": "2026-02-16T07:58:48.256Z"
-            },
-            {
-              "$type": "Document",
-              "DocumentIndex": 1,
-              "Title": "main.cpp",
-              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\main.cpp",
-              "RelativeDocumentMoniker": "hyperv-attachment\\src\\main.cpp",
-              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\main.cpp",
-              "RelativeToolTip": "hyperv-attachment\\src\\main.cpp",
-              "ViewState": "AgIAAGQAAAAAAAAAAAASwHkAAAAXAAAAAAAAAA==",
+              "DocumentIndex": 19,
+              "Title": "violation.cpp",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\slat\\violation\\violation.cpp",
+              "RelativeDocumentMoniker": "hyperv-attachment\\src\\slat\\violation\\violation.cpp",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\slat\\violation\\violation.cpp",
+              "RelativeToolTip": "hyperv-attachment\\src\\slat\\violation\\violation.cpp",
+              "ViewState": "AgIAADAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
               "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
-              "WhenOpened": "2026-02-16T07:58:42.791Z",
-              "EditorCaption": ""
+              "WhenOpened": "2026-02-24T00:37:36.887Z"
             },
             {
               "$type": "Document",
-              "DocumentIndex": 2,
-              "Title": "network.cpp",
-              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\network.cpp",
-              "RelativeDocumentMoniker": "hyperv-attachment\\src\\network\\network.cpp",
-              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\network\\network.cpp",
-              "RelativeToolTip": "hyperv-attachment\\src\\network\\network.cpp",
-              "ViewState": "AgIAACwIAAAAAAAAAAAiwFYIAAABAAAAAAAAAA==",
-              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000677|",
-              "WhenOpened": "2026-02-16T02:55:02.472Z"
+              "DocumentIndex": 18,
+              "Title": "memory_manager.h",
+              "DocumentMoniker": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\memory_manager\\memory_manager.h",
+              "RelativeDocumentMoniker": "hyperv-attachment\\src\\memory_manager\\memory_manager.h",
+              "ToolTip": "C:\\Users\\owo\\Desktop\\hyperdma\\hyperv-attachment\\src\\memory_manager\\memory_manager.h",
+              "RelativeToolTip": "hyperv-attachment\\src\\memory_manager\\memory_manager.h",
+              "ViewState": "AgIAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA==",
+              "Icon": "ae27a6b0-e345-4288-96df-5eaf394ee369.000680|",
+              "WhenOpened": "2026-02-24T04:10:18.318Z"
             }
           ]
         }

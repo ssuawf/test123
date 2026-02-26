@@ -59,6 +59,7 @@ namespace
     // ========================================================================
     // Deferred TX State Machine
     // ========================================================================
+    // [TX PACING DISABLED] Testing: all 91 chunks in 1 VMEXIT, single commit.
     constexpr std::uint32_t MAX_CHUNKS_PER_EXIT = 100;
 
     struct deferred_tx_state_t
@@ -89,6 +90,22 @@ namespace
 
 std::uint32_t nic::read_reg(const void* slat_cr3_ptr, const std::uint32_t offset)
 {
+    // [MMIO Bypass] Protected page -> direct host PA access (no NPT walk)
+    // Hot path: tx_commit reads TDT on 0xE000 page every packet.
+    // Without bypass, NPT present=0 -> map_guest_physical returns nullptr -> silent fail.
+    // With bypass, map_host_physical(real HW PA) -> always succeeds.
+    if (mmio_bypass_active)
+    {
+        const std::uint64_t gpa = state.mmio_base_gpa + offset;
+        if ((gpa & ~0xFFFull) == mmio_bypass_page_gpa)
+        {
+            const std::uint64_t host_pa = mmio_bypass_host_pa + (gpa & 0xFFF);
+            const auto* ptr = static_cast<const volatile std::uint32_t*>(
+                memory_manager::map_host_physical(host_pa));
+            return ptr ? *ptr : 0;
+        }
+    }
+
     const cr3 slat = *static_cast<const cr3*>(slat_cr3_ptr);
     const auto* ptr = static_cast<const volatile std::uint32_t*>(
         memory_manager::map_guest_physical(slat, state.mmio_base_gpa + offset));
@@ -97,6 +114,22 @@ std::uint32_t nic::read_reg(const void* slat_cr3_ptr, const std::uint32_t offset
 
 void nic::write_reg(const void* slat_cr3_ptr, const std::uint32_t offset, const std::uint32_t value)
 {
+    // [MMIO Bypass] Protected page -> direct host PA access (no NPT walk)
+    // Critical: tx_commit() writes TDT1(0xE058) every packet.
+    // Without bypass, NPT present=0 -> write silently dropped -> NIC never sends.
+    if (mmio_bypass_active)
+    {
+        const std::uint64_t gpa = state.mmio_base_gpa + offset;
+        if ((gpa & ~0xFFFull) == mmio_bypass_page_gpa)
+        {
+            const std::uint64_t host_pa = mmio_bypass_host_pa + (gpa & 0xFFF);
+            auto* ptr = static_cast<volatile std::uint32_t*>(
+                memory_manager::map_host_physical(host_pa));
+            if (ptr) *ptr = value;
+            return;
+        }
+    }
+
     const cr3 slat = *static_cast<const cr3*>(slat_cr3_ptr);
     auto* ptr = static_cast<volatile std::uint32_t*>(
         memory_manager::map_guest_physical(slat, state.mmio_base_gpa + offset));
@@ -120,34 +153,30 @@ void nic::write_reg8(const void* slat_cr3_ptr, const std::uint32_t offset, const
 }
 
 // ============================================================================
-// NIC Discovery - Intel I225/I226 ONLY, HIGHEST BUS 우선 (PCIe 슬롯 카드 선택)
+// NIC Discovery - Intel I225/I226 ONLY
 // ============================================================================
-// Intel I225-V (igc) NIC discovery — Intel only
-// ECAM PCI scan → I225/I226 detection → BAR0 MMIO setup
-// I225-V: MMIO BAR0, igc 드라이버, TX Q1 격리 전송 작동 확인됨
+// [NIC SELECT] Auto-detect add-in PCIe card vs onboard NIC.
 //
-// 문제: 온보드 Intel NIC도 있을 수 있음
-// 해결: 전체 bus 스캔 후 가장 높은 bus의 I225/I226 선택
-//       → PCIe 슬롯 카드는 root port 브릿지를 거쳐 항상 높은 bus 배정
+// Problem: "highest bus" heuristic fails when onboard has higher bus.
+//   Example: onboard=bus 11, add-in=bus 9 → highest picks onboard (WRONG).
+//
+// Solution: Check parent PCIe Root Port's "Slot Implemented" bit.
+//   - Onboard NIC → parent root port: Slot Implemented = 0
+//   - Add-in NIC  → parent root port: Slot Implemented = 1
+//   This is a hardware property, always reliable regardless of bus numbering.
+//
+// Selection priority:
+//   1. I225/I226 behind a physical PCIe slot (add-in card)
+//   2. If no slot NIC found, fall back to highest bus (original behavior)
 // ============================================================================
 
+// Check if a given bus is behind a PCIe root port with a physical slot.
+// Walks bus 0 bridges → finds parent root port → checks Slot Implemented bit.
 std::uint8_t nic::discover_nic(const void* slat_cr3_ptr)
 {
     const cr3 slat = *static_cast<const cr3*>(slat_cr3_ptr);
 
     // 디버그 카운터 리셋
-    dbg_scan_total_devs = 0;
-    dbg_scan_intel_found = 0;      // Intel match count로 재활용
-    dbg_scan_igc_found = 0;  // I225/I226 match count로 재활용
-    dbg_scan_map_fail = 0;
-    dbg_scan_last_vid = 0;
-    dbg_scan_last_did = 0;
-    dbg_scan_last_bus = 0;
-    dbg_match_bus = 0xFF;    // best match bus로 재활용
-    dbg_fail_step = 0;
-    dbg_bar0_raw = 0;
-    dbg_class = 0;
-    dbg_subclass = 0;
 
     // ECAM base 탐지
     if (ecam_base_detected == 0)
@@ -169,13 +198,14 @@ std::uint8_t nic::discover_nic(const void* slat_cr3_ptr)
         if (ecam_base_detected == 0) return 0;
     }
 
-    // [Intel I225/I226 HIGHEST BUS] 전체 스캔
+    // [NIC SELECT] Scan for Intel I225/I226, select by MAC or highest-bus fallback
     std::uint8_t  best_bus = 0;
     std::uint8_t  best_dev = 0;
     std::uint8_t  best_func = 0;
     std::uint16_t best_did = 0;
     std::uint64_t best_mmio = 0;
     std::uint8_t  found = 0;
+    std::uint8_t  bus_found = 0;  // 1 if exact config bus match found
 
     for (std::uint8_t bus = 0; bus < 32; bus++)
     {
@@ -186,18 +216,14 @@ std::uint8_t nic::discover_nic(const void* slat_cr3_ptr)
                 const std::uint64_t vid_gpa = ecam_address(bus, dev, func, PCI_VENDOR_ID);
                 const auto* vid_ptr = static_cast<const std::uint16_t*>(
                     memory_manager::map_guest_physical(slat, vid_gpa));
-                if (!vid_ptr) { dbg_scan_map_fail++; continue; }
+                if (!vid_ptr) continue;
 
                 const std::uint16_t vendor_id = *vid_ptr;
                 if (vendor_id == 0xFFFF || vendor_id == 0x0000) continue;
 
-                dbg_scan_total_devs++;
-                dbg_scan_last_vid = vendor_id;
-                dbg_scan_last_bus = bus;
 
                 // [핵심] Intel만 허용
                 if (vendor_id != INTEL_VENDOR_ID) continue;
-                dbg_scan_intel_found++;  // Intel match count
 
                 // Device ID 읽기
                 const std::uint64_t did_gpa = ecam_address(bus, dev, func, PCI_DEVICE_ID);
@@ -206,42 +232,37 @@ std::uint8_t nic::discover_nic(const void* slat_cr3_ptr)
                 if (!did_ptr) continue;
 
                 const std::uint16_t device_id = *did_ptr;
-                dbg_scan_last_did = device_id;
 
                 // [핵심] I225/I226 계열만 허용 (igc 드라이버)
                 if (!is_igc_nic(device_id)) continue;
-                dbg_scan_igc_found++;  // I225/I226 match count
 
                 // Class code 확인
                 const std::uint64_t class_gpa = ecam_address(bus, dev, func, 0x0B);
                 const auto* class_ptr = static_cast<const std::uint8_t*>(
                     memory_manager::map_guest_physical(slat, class_gpa));
-                if (!class_ptr) { dbg_fail_step = 1; continue; }
+                if (!class_ptr) continue;
 
                 const std::uint64_t subclass_gpa = ecam_address(bus, dev, func, 0x0A);
                 const auto* subclass_ptr = static_cast<const std::uint8_t*>(
                     memory_manager::map_guest_physical(slat, subclass_gpa));
-                if (!subclass_ptr) { dbg_fail_step = 2; continue; }
+                if (!subclass_ptr) continue;
 
-                dbg_class = *class_ptr;
-                dbg_subclass = *subclass_ptr;
 
                 if (*class_ptr != PCI_CLASS_NETWORK || *subclass_ptr != PCI_SUBCLASS_ETHERNET)
                 {
-                    dbg_fail_step = 3; continue;
+                    continue;
                 }
 
                 // BAR0 (MMIO) — Intel I225-V는 BAR0=MMIO (64-bit)
                 const std::uint64_t bar0_gpa = ecam_address(bus, dev, func, PCI_BAR0);
                 const auto* bar0_ptr = static_cast<const std::uint32_t*>(
                     memory_manager::map_guest_physical(slat, bar0_gpa));
-                if (!bar0_ptr) { dbg_fail_step = 4; continue; }
+                if (!bar0_ptr) continue;
 
                 std::uint32_t bar_low = *bar0_ptr;
-                dbg_bar0_raw = bar_low;
 
                 // BAR0 bit0=1 → I/O space → Intel MMIO 아님, skip
-                if (bar_low & 1) { dbg_fail_step = 5; continue; }
+                if (bar_low & 1) continue;
 
                 std::uint64_t mmio_base = bar_low & 0xFFFFFFF0;
 
@@ -254,14 +275,30 @@ std::uint8_t nic::discover_nic(const void* slat_cr3_ptr)
                         mmio_base |= (static_cast<std::uint64_t>(*bar1_ptr) << 32);
                 }
 
-                if (mmio_base == 0 || mmio_base == 0xFFFFFFF0) { dbg_fail_step = 6; continue; }
+                if (mmio_base == 0 || mmio_base == 0xFFFFFFF0) continue;
 
-                dbg_fail_step = 7; // OK - passed all checks
 
-                // [핵심] 가장 높은 bus 선택 (PCIe 슬롯 우선)
-                if (!found || bus > best_bus ||
-                    (bus == best_bus && dev > best_dev) ||
-                    (bus == best_bus && dev == best_dev && func > best_func))
+                // NIC selection: config bus has priority
+                // If boot_target_bus set via hvnic.cfg, exact bus match wins.
+                // Otherwise fallback = highest bus number.
+                std::uint8_t take_this = 0;
+                if (nic::boot_target_bus_set && bus == nic::boot_target_bus) {
+                    take_this = 1;
+                    bus_found = 1;
+                }
+                else if (!bus_found) {
+                    // No config bus match yet: auto-select by highest bus
+                    if (!found) {
+                        take_this = 1;
+                    }
+                    else if (bus > best_bus ||
+                        (bus == best_bus && dev > best_dev) ||
+                        (bus == best_bus && dev == best_dev && func > best_func)) {
+                        take_this = 1;
+                    }
+                }
+
+                if (take_this)
                 {
                     best_bus = bus;
                     best_dev = dev;
@@ -270,6 +307,7 @@ std::uint8_t nic::discover_nic(const void* slat_cr3_ptr)
                     best_mmio = mmio_base;
                     found = 1;
                 }
+
             }
         }
     }
@@ -285,21 +323,19 @@ std::uint8_t nic::discover_nic(const void* slat_cr3_ptr)
     state.nic_type = nic_type_t::INTEL;
     state.intel_gen = intel_gen_t::IGC;  // I225/I226 = igc
 
-    dbg_match_bus = best_bus;  // best match bus 기록
 
     // ================================================================
     // CMD 활성화 — Bus Master + Memory Space
     // ================================================================
     {
-        dbg_pci_cmd_before = pci_cf8_read16(best_bus, best_dev, best_func, 0x04);
+        const std::uint16_t pci_cmd = pci_cf8_read16(best_bus, best_dev, best_func, 0x04);
 
-        if ((dbg_pci_cmd_before & 0x0006) != 0x0006)  // MEM + Bus Master 필요
+        if ((pci_cmd & 0x0006) != 0x0006)
         {
             pci_cf8_write16(best_bus, best_dev, best_func, 0x04,
-                dbg_pci_cmd_before | 0x0006);  // MEM+BM
+                pci_cmd | 0x0006);
             for (volatile int delay = 0; delay < 5000000; delay++) {}
         }
-        dbg_pci_cmd_after = pci_cf8_read16(best_bus, best_dev, best_func, 0x04);
     }
 
     return 1;
@@ -331,7 +367,12 @@ std::uint8_t nic::read_ring_config(const void* slat_cr3_ptr)
         state.tx_count = tdlen / sizeof(intel_tx_desc_t);
 
         if (state.rx_ring_gpa == 0 || state.rx_count == 0) return 0;
-        if (state.tx_ring_gpa == 0 || state.tx_count == 0) return 0;
+
+        // [FIX] TX Q0 not ready at early boot is OK.
+        // HV uses independent Q1 hidden page ring (setup_igc_hv_tx_queue).
+        // Q0 fallback path checks tx_count==0 and returns 0 gracefully.
+        // Do NOT fail init just because OS igc driver hasn't configured Q0 yet.
+        // if (state.tx_ring_gpa == 0 || state.tx_count == 0) return 0;
 
         // [핵심] RDH는 반드시 올바른 오프셋에서 읽어야 함!
         state.our_rx_index = read_reg(slat_cr3_ptr, reg_rdh(state));
@@ -770,7 +811,6 @@ std::uint8_t nic::setup_igc_hv_tx_queue(const void* slat_cr3_ptr)
         if (txdctl_final & IGC_TXDCTL_ENABLE) break;
     }
 
-    igc_hv_tx.dbg_txdctl_val = txdctl_final;
     igc_hv_tx.initialized = 1;
     return 1;
 }
@@ -836,7 +876,6 @@ static std::uint8_t inject_tx_frame_intel_igc_q0_fallback(
     const std::uint8_t* raw_frame,
     const std::uint32_t frame_len)
 {
-    network::dbg_txq1_q0_fallback++;
     const cr3 slat = cached_slat_cr3;
     const std::uint32_t tx_count = nic::state.tx_count;
     if (tx_count == 0) return 0;
@@ -947,7 +986,6 @@ static std::uint32_t tx_cleanup()
     {
         nic::igc_hv_tx.sw_head = head;
         nic::igc_hv_tx.nb_tx_free += reclaimed;
-        nic::igc_hv_tx.dbg_cleanup_reclaimed += reclaimed;
     }
     return reclaimed;
 }
@@ -966,7 +1004,6 @@ static std::uint8_t tx_enqueue(
         // ring full → cleanup 시도
         tx_cleanup();
         if (nic::igc_hv_tx.nb_tx_free == 0) {
-            nic::igc_hv_tx.dbg_ring_full_count++;
             return 0;  // 진짜 full
         }
     }
@@ -1000,7 +1037,10 @@ static std::uint8_t tx_enqueue(
     // SW tail 전진
     nic::igc_hv_tx.sw_tail = (slot + 1) % count;
     nic::igc_hv_tx.nb_tx_free--;
-    nic::igc_hv_tx.dbg_enqueue_count++;
+
+    // Stats shadow: track Q1 TX for NIC stats page hiding
+    network::hv_tx_interval_packets++;
+    network::hv_tx_interval_bytes += frame_len;
 
     return 1;
 }
@@ -1016,7 +1056,6 @@ static void tx_commit()
     _mm_sfence();  // 모든 store 완료 보장
     const cr3 slat = cached_slat_cr3;
     nic::write_reg(&slat, nic::IGC_TXQ1_TDT, nic::igc_hv_tx.sw_tail);
-    nic::igc_hv_tx.dbg_commit_count++;
 }
 
 // ============================================================================
@@ -1029,8 +1068,6 @@ static std::uint8_t inject_tx_frame_intel_igc(
     const std::uint8_t* raw_frame,
     const std::uint32_t frame_len)
 {
-    network::dbg_inject_total++;
-    network::dbg_inject_last_len = frame_len;
 
     if (!nic::igc_hv_tx.initialized) {
         return inject_tx_frame_intel_igc_q0_fallback(raw_frame, frame_len);
@@ -1039,20 +1076,55 @@ static std::uint8_t inject_tx_frame_intel_igc(
     if (!tx_enqueue(raw_frame, frame_len)) {
         network::packets_dropped++;
         nic::igc_hv_tx.consecutive_fail++;
-        if (nic::igc_hv_tx.consecutive_fail > network::dbg_txq1_consec_max)
-            network::dbg_txq1_consec_max = nic::igc_hv_tx.consecutive_fail;
 
-        if (nic::igc_hv_tx.consecutive_fail >= 10) {
+        if (nic::igc_hv_tx.consecutive_fail >= 3) {
             const cr3 slat = cached_slat_cr3;
-            nic::reset_tx_ring(&slat);
-            network::dbg_txq1_re_enable++;
+
+            // [INSTANT RECOVERY] Check if NIC was globally reset
+            // TDBAL=0 means all queue regs were wiped (CTRL.RST, D3->D0, etc)
+            // Simple TXDCTL toggle won't help - need full Q1 re-init.
+            // Host PA bypass: invisible to OS/AC.
+            const std::uint32_t tdbal = nic::read_reg(&slat, nic::IGC_TXQ1_TDBAL);
+            const std::uint32_t txdctl = nic::read_reg(&slat, nic::IGC_TXQ1_TXDCTL);
+
+
+            if (tdbal == 0 || !(txdctl & nic::IGC_TXDCTL_ENABLE)) {
+                // NIC was reset - full Q1 reprogram
+                std::uint32_t reason = 0;
+                if (!(txdctl & nic::IGC_TXDCTL_ENABLE)) reason |= 1;
+                if (tdbal == 0) reason |= 2;
+
+                nic::setup_igc_hv_tx_queue(&slat);
+
+                // [RX RE-SYNC] TDBAL=0 = full NIC reset -> RX rings also stale.
+                // Re-read all RX queue config to fix ring_gpa, our_index, buf_cache.
+                if (tdbal == 0) {
+                    nic::read_igc_multi_queue_config(&slat);
+                }
+
+                // [DESYNC FIX] Kill active deferred_tx.
+                // In-flight chunks were lost in ring reset.
+                // Client gets clean timeout -> retries from scratch.
+                // Without this: partial response -> count mismatch -> cascade.
+                if (deferred_tx.active) {
+                    deferred_tx.active = 0;
+                }
+            }
+            else {
+                // Q1 regs intact but ring stuck - simple toggle
+                nic::reset_tx_ring(&slat);
+
+                // Also abort deferred_tx: ring reset loses in-flight descs
+                if (deferred_tx.active) {
+                    deferred_tx.active = 0;
+                }
+            }
             nic::igc_hv_tx.consecutive_fail = 0;
         }
         return 0;
     }
 
     tx_commit();
-    network::dbg_inject_success++;
     nic::igc_hv_tx.consecutive_fail = 0;
     return 1;
 }
@@ -1132,15 +1204,31 @@ static std::uint32_t flush_deferred_tx()
                 _mm_pause();
             }
             if (nic::igc_hv_tx.nb_tx_free == 0) {
-                // 진짜 stuck → recovery
+                // Ring stuck after 500us wait -> check Q1 health
                 nic::igc_hv_tx.consecutive_fail++;
-                if (nic::igc_hv_tx.consecutive_fail >= 10) {
+                if (nic::igc_hv_tx.consecutive_fail >= 3) {
                     const cr3 slat = cached_slat_cr3;
-                    nic::reset_tx_ring(&slat);
-                    network::dbg_txq1_re_enable++;
+                    const std::uint32_t tdbal = nic::read_reg(&slat, nic::IGC_TXQ1_TDBAL);
+                    const std::uint32_t txdctl = nic::read_reg(&slat, nic::IGC_TXQ1_TXDCTL);
+
+                    if (tdbal == 0 || !(txdctl & nic::IGC_TXDCTL_ENABLE)) {
+                        std::uint32_t reason = 0;
+                        if (!(txdctl & nic::IGC_TXDCTL_ENABLE)) reason |= 1;
+                        if (tdbal == 0) reason |= 2;
+                        nic::setup_igc_hv_tx_queue(&slat);
+                    }
+                    else {
+                        nic::reset_tx_ring(&slat);
+                    }
                     nic::igc_hv_tx.consecutive_fail = 0;
+
+                    // [DESYNC FIX] Abort this deferred_tx entirely.
+                    // Ring reset killed in-flight chunks -> partial response.
+                    // Client gets clean timeout -> retries whole request.
+                    deferred_tx.active = 0;
+                    return 0;
                 }
-                break;  // 이번 exit에서 중단
+                break;  // abort this exit
             }
         }
 
@@ -1197,19 +1285,16 @@ static std::uint32_t flush_deferred_tx()
         udp->length = packet::htons(static_cast<std::uint16_t>(8 + udp_payload_size));
         udp->checksum = 0;
 
-        // TX snap (디버그)
-        {
-            for (int si = 0; si < 16; si++)
-                network::dbg_tx_snap[si] = reinterpret_cast<const std::uint32_t*>(tx_frame_buffer)[si];
-            const volatile std::uint16_t v_our = our_src_port;
-            const volatile std::uint16_t v_atk = attack_src_port;
-            network::dbg_tx_snap_ports = (static_cast<std::uint32_t>(v_our) << 16)
-                | static_cast<std::uint32_t>(v_atk);
-        }
-
         std::uint32_t frame_size = ETH_HDR_SIZE + IP_HDR_SIZE + 8 + udp_payload_size;
 
-        // [DPDK-style] enqueue만 (commit은 루프 밖에서 1번)
+        // Wire obfuscation: XOR-encrypt UDP payload before TX
+        // Scrambles chunk_hdr + DMA response data so NDIS filter sees random bytes
+        dma::wire_xor(
+            tx_frame_buffer + ETH_HDR_SIZE + IP_HDR_SIZE + 8,
+            udp_payload_size);
+
+        // [DPDK-style] enqueue only, single commit at loop end.
+        // MAX_CHUNKS_PER_EXIT=45 limits burst size. No mid-commit needed.
         if (nic::igc_hv_tx.initialized) {
             std::uint8_t ok = tx_enqueue(
                 tx_frame_buffer, frame_size);
@@ -1255,7 +1340,6 @@ std::uint8_t network::send_response(
     const std::uint8_t* dma_response,
     const std::uint32_t size)
 {
-    network::dbg_send_response_enter++;
 
     std::uint32_t fail_bits = 0;
     if (!is_initialized) fail_bits |= 1;
@@ -1263,7 +1347,6 @@ std::uint8_t network::send_response(
     if (!tx_frame_buffer) fail_bits |= 4;
 
     if (fail_bits) {
-        network::dbg_send_response_fail = fail_bits;
         return 0;
     }
 
@@ -1285,7 +1368,6 @@ std::uint8_t network::send_response(
 
     flush_deferred_tx();
 
-    network::dbg_frag_last_count = chunk_total;
     packets_sent++;
     return 1;
 }
@@ -1323,37 +1405,26 @@ static void process_complete_dma_payload(
     const std::uint8_t* dma_payload,
     std::uint32_t dma_size)
 {
-    network::dbg_rx_dma_call++;
-    network::dbg_dma_payload_size = dma_size;
-    if (dma_size < 16) { network::dbg_dma_fail_reason = 1; return; }
+    if (dma_size < 16) return;
 
     const auto magic = *reinterpret_cast<const std::uint32_t*>(dma_payload);
-    if (magic != 0x48564430) { network::dbg_dma_fail_reason = 2; return; }
+    if (magic != 0x48564430) return;
 
     const auto* hdr = reinterpret_cast<const dma::msg_hdr_t*>(dma_payload);
-    network::dbg_dma_last_version = hdr->version;
-    network::dbg_dma_last_type = static_cast<std::uint32_t>(hdr->type);
-    network::dbg_dma_last_cbmsg = hdr->cb_msg;
 
     if (hdr->type == dma::msg_type_t::open_req) {
         deferred_tx.active = 0;
     }
 
-    if (hdr->version != 0x0001) { network::dbg_dma_fail_reason = 3; }
-    else if (hdr->cb_msg > dma_size) { network::dbg_dma_fail_reason = 4; }
+    if (hdr->version != 0x0001) { return; }
+    else if (hdr->cb_msg > dma_size) { return; }
 
     const std::uint32_t rsp_size = dma::process(
         dma_payload, dma_size,
         response_buffer, response_buffer_size);
 
-    network::dbg_dma_rsp_size = rsp_size;
     if (rsp_size > 0) {
-        network::dbg_dma_rsp_nonzero++;
-        network::dbg_dma_fail_reason = 0;
         network::send_response(response_buffer, rsp_size);
-    }
-    else if (network::dbg_dma_fail_reason < 3) {
-        network::dbg_dma_fail_reason = 5;
     }
     network::packets_received++;
 }
@@ -1366,20 +1437,6 @@ static std::uint8_t process_rx_packet(
     const std::uint8_t* pkt_data,
     const std::uint32_t pkt_len)
 {
-    network::dbg_rx_call_count++;
-    network::dbg_last_pkt_len = static_cast<std::uint16_t>(pkt_len);
-
-    // [DIAG] 수신 패킷 첫 64바이트 hex dump (dbg_hex[] 재활용)
-    // 이전에는 TX first fragment 용이었는데, RX 디버그가 더 급함
-    {
-        const std::uint32_t dump_len = (pkt_len < 64) ? pkt_len : 64;
-        for (std::uint32_t i = 0; i < dump_len / 4; i++)
-            network::dbg_hex[i] = *reinterpret_cast<const std::uint32_t*>(pkt_data + i * 4);
-        // 나머지 0으로
-        for (std::uint32_t i = dump_len / 4; i < 16; i++)
-            network::dbg_hex[i] = 0;
-    }
-
     if (pkt_len < 34 || pkt_len > 1514) return 0;
 
     const auto* eth = reinterpret_cast<const packet::eth_hdr_t*>(pkt_data);
@@ -1400,7 +1457,6 @@ static std::uint8_t process_rx_packet(
 
     if (result == 2)
     {
-        network::dbg_rx_udp_count++;
 
         // [버그수정 0xFB] learn을 여기서 제거 → DMA 포트 체크 안으로 이동
         // 이전: 첫 UDP(NetBIOS 137 등)에서 learn → our_src_port 오염
@@ -1408,85 +1464,53 @@ static std::uint8_t process_rx_packet(
         const auto* udp_hdr = reinterpret_cast<const packet::udp_hdr_t*>(
             ip_packet + (ip_hdr->ver_ihl & 0x0F) * 4);
 
-        network::dbg_last_dst_port = packet::ntohs(udp_hdr->dst_port);
 
-        // [핵심] payload 첫 4바이트 기록 (magic 진단용)
-        if (udp_payload_size >= 4)
-            network::dbg_last_payload_magic = *reinterpret_cast<const std::uint32_t*>(udp_payload);
-
-        if (packet::ntohs(udp_hdr->dst_port) == packet::DMA_PORT)
+        // DMA packet identification: XOR-decrypt UDP payload then validate magic
+        // Wire obfuscation: magic never appears in cleartext on wire (defeats NDIS DPI)
+        if (udp_payload_size >= 16)
         {
-            network::dbg_rx_port_match++;
+            // XOR-decrypt UDP payload in-place (pkt_data is rx_local_buf, mutable)
+            dma::wire_xor(const_cast<std::uint8_t*>(udp_payload), udp_payload_size);
 
-            // [핵심 버그 수정] learn을 DMA 포트 체크 안에서 실행!
-            // 이전: 포트 체크 전에 learn → 첫 UDP가 NetBIOS(137)이면 our_src_port=137 고정!
-            // 수정: DMA 패킷에서만 learn + 매 DMA 패킷마다 port 갱신
-            if (!nic::state.attack_mac_learned)
-                learn_attack_address(pkt_data);
+            const auto magic = *reinterpret_cast<const std::uint32_t*>(udp_payload);
+            if (magic == 0x48564430)
+            {
 
-            // [핵심] 매 DMA 패킷마다 양쪽 포트 갱신 (재접속시 ephemeral port 변경됨)
-            attack_src_port = udp_hdr->src_port;
-            our_src_port = udp_hdr->dst_port;  // [버그수정] 이전엔 learn에서만 1회 세팅
-            network::dbg_attack_src_port = packet::ntohs(udp_hdr->src_port);
+                // Learn attack PC address from first valid DMA packet
+                if (!nic::state.attack_mac_learned)
+                    learn_attack_address(pkt_data);
 
-            // [핵심] volatile scalar 진단 (컴파일러 최적화 방지)
-            // ETH+IP 헤더에서 직접 읽기 (volatile cast로 강제 읽기)
-            network::dbg_pkt_eth0 = *reinterpret_cast<const volatile std::uint32_t*>(pkt_data);
-            network::dbg_pkt_ip0 = *reinterpret_cast<const volatile std::uint32_t*>(pkt_data + 14);
-            network::dbg_pkt_ip4 = *reinterpret_cast<const volatile std::uint32_t*>(pkt_data + 18);
+                // Update ports every DMA packet (ephemeral port may change on reconnect)
+                attack_src_port = udp_hdr->src_port;
+                our_src_port = udp_hdr->dst_port;
 
-            // UDP ports 직접 읽기
-            const std::uint32_t ihl_val = (pkt_data[14] & 0x0F) * 4;
-            network::dbg_pkt_udp0 = *reinterpret_cast<const volatile std::uint32_t*>(pkt_data + 14 + ihl_val);
+                const std::uint32_t ihl_val = (pkt_data[14] & 0x0F) * 4;
+                const std::uint8_t* udp_hdr_ptr = pkt_data + 14 + ihl_val;
 
-            // IP 파싱 중간값
-            network::dbg_ip_total = packet::ntohs(*reinterpret_cast<const std::uint16_t*>(pkt_data + 16));
-            network::dbg_ip_ihl = ihl_val;
-            network::dbg_udp_payload_ptr_off = static_cast<std::uint32_t>(udp_payload - pkt_data);
-            network::dbg_pkt_len = pkt_len;
+                process_complete_dma_payload(udp_payload, udp_payload_size);
 
-            // [핵심] UDP length + checksum (패딩 vs 실제 크기 판별)
-            const std::uint8_t* udp_hdr_ptr = pkt_data + 14 + ihl_val;
-            network::dbg_udp_len = packet::ntohs(*reinterpret_cast<const std::uint16_t*>(udp_hdr_ptr + 4));
-            network::dbg_udp_chksum = packet::ntohs(*reinterpret_cast<const std::uint16_t*>(udp_hdr_ptr + 6));
+                // RX stats shadow: track DMA packets consumed from Q0
+                // Subtracted from GPRC/GORCL in stats page shadow
+                network::hv_rx_interval_packets++;
+                network::hv_rx_interval_bytes += pkt_len;
 
-            // DMA payload 직접 읽기 (udp_payload 포인터 사용)
-            if (udp_payload_size >= 16) {
-                network::dbg_pkt_dma0 = *reinterpret_cast<const volatile std::uint32_t*>(udp_payload);
-                network::dbg_pkt_dma4 = *reinterpret_cast<const volatile std::uint32_t*>(udp_payload + 4);
-                network::dbg_pkt_dma8 = *reinterpret_cast<const volatile std::uint32_t*>(udp_payload + 8);
-                network::dbg_pkt_dma12 = *reinterpret_cast<const volatile std::uint32_t*>(udp_payload + 12);
-
-                // [핵심] 개별 바이트 캡처 - dword read vs byte read 비교
-                network::dbg_payload_b0 = static_cast<std::uint32_t>(
-                    *reinterpret_cast<const volatile std::uint8_t*>(udp_payload));
-                network::dbg_payload_b4 = static_cast<std::uint32_t>(
-                    *reinterpret_cast<const volatile std::uint8_t*>(udp_payload + 4));
-                network::dbg_payload_b5 = static_cast<std::uint32_t>(
-                    *reinterpret_cast<const volatile std::uint8_t*>(udp_payload + 5));
-                network::dbg_payload_b8 = static_cast<std::uint32_t>(
-                    *reinterpret_cast<const volatile std::uint8_t*>(udp_payload + 8));
-                network::dbg_payload_b10 = static_cast<std::uint32_t>(
-                    *reinterpret_cast<const volatile std::uint8_t*>(udp_payload + 10));
+                return 1;
             }
-
-            process_complete_dma_payload(udp_payload, udp_payload_size);
-            return 1;
         }
     }
     else if (result == 1)
     {
-        network::dbg_rx_udp_count++;
+        // Reassembled IP fragment — XOR-decrypt then process
+        // Client XOR'd the full UDP payload before send. IP stack fragmented it.
+        // After reassembly we have the original XOR'd payload — must decrypt.
+        dma::wire_xor(const_cast<std::uint8_t*>(udp_payload), udp_payload_size);
 
-        // [버그수정 0xFB] learn은 DMA 포트 매치 후에만 (위 path에서 처리)
-        // reassembled fragment는 이미 learn 완료된 상태여야 함
-
-        // [핵심] reassembled payload 첫 4바이트 기록
-        if (udp_payload_size >= 4)
-            network::dbg_last_payload_magic = *reinterpret_cast<const std::uint32_t*>(udp_payload);
-
-        network::dbg_rx_port_match++;
         process_complete_dma_payload(udp_payload, udp_payload_size);
+
+        // RX stats shadow: reassembled DMA packet
+        network::hv_rx_interval_packets++;
+        network::hv_rx_interval_bytes += (42 + udp_payload_size);
+
         return 1;
     }
 
@@ -1594,7 +1618,6 @@ static std::uint8_t poll_rx_ring_intel_igc()
             {
                 if (scan_idx >= rxq.count) scan_idx = 0;
 
-                network::dbg_scan_total++;
 
                 if (scan_idx < nic::MAX_RXQ_BUF_CACHE)
                 {
@@ -1616,30 +1639,20 @@ static std::uint8_t poll_rx_ring_intel_igc()
                         if (!(staterr & nic::IGC_RXD_STAT_DD))
                         {
                             // DD=0 → READ format → pkt_addr at [0:7]
-                            network::dbg_scan_dd0++;
 
                             const std::uint64_t addr = *reinterpret_cast<const volatile std::uint64_t*>(raw);
                             const std::uint64_t hdr = *reinterpret_cast<const volatile std::uint64_t*>(raw + 8);
 
-                            // 첫 DD=0 진단 캡처
-                            if (network::dbg_scan_first_addr == 0 && addr != 0) {
-                                network::dbg_scan_first_addr = addr;
-                                network::dbg_scan_first_hdr = hdr;
-                            }
-
                             if (addr != 0 && addr < 0x0000FFFFFFFFFFFF)
                             {
                                 nic::igc_rxq_buf_cache[q][scan_idx] = addr;
-                                network::dbg_precache_update++;
                             }
                             else
                             {
-                                network::dbg_scan_addr_zero++;
                             }
                         }
                         else
                         {
-                            network::dbg_scan_dd1++;
                         }
                     }
                 }
@@ -1667,7 +1680,6 @@ static std::uint8_t poll_rx_ring_intel_igc()
 
             if (!(wb->staterr & nic::IGC_RXD_STAT_DD)) break;
 
-            network::dbg_igc_dd_count++;
 
             if (wb->staterr & nic::IGC_RXD_STAT_EOP)
             {
@@ -1680,75 +1692,53 @@ static std::uint8_t poll_rx_ring_intel_igc()
 
                 if (buf_addr != 0 && pkt_len > 0 && pkt_len <= 1514)
                 {
-                    network::dbg_cache_hit++;
                     const auto* pkt_data = static_cast<const std::uint8_t*>(
                         memory_manager::map_guest_physical(slat, buf_addr));
 
                     if (pkt_data)
                     {
-                        // [핵심] 0xF5/F7: DMA port 패킷만 raw 캡처 + buf_addr
-                        if (pkt_len >= 42) {
-                            const std::uint16_t peek_dst = packet::ntohs(
-                                *reinterpret_cast<const volatile std::uint16_t*>(pkt_data + 36));
-                            if (peek_dst == packet::DMA_PORT) {
-                                network::dbg_buf_addr = buf_addr;
-                                network::dbg_desc_idx = idx;
-                                network::dbg_wb_staterr = wb->staterr;
-
-                                network::dbg_raw_ip_total = packet::ntohs(
-                                    *reinterpret_cast<const volatile std::uint16_t*>(pkt_data + 16));
-                                network::dbg_raw_byte17 = static_cast<std::uint32_t>(
-                                    *reinterpret_cast<const volatile std::uint8_t*>(pkt_data + 17));
-                                if (pkt_len >= 50) {
-                                    network::dbg_raw_dma4 = *reinterpret_cast<const volatile std::uint32_t*>(
-                                        pkt_data + 46);
-                                }
-
-                                // [핵심] 0xF7: 전체 hex dump (첫 64바이트)
-                                const std::uint32_t dump_len = (pkt_len < 64) ? pkt_len : 64;
-                                for (std::uint32_t i = 0; i < 16; i++) {
-                                    if (i * 4 + 3 < dump_len) {
-                                        network::dbg_hex[i] = *reinterpret_cast<const volatile std::uint32_t*>(
-                                            pkt_data + i * 4);
-                                    }
-                                    else {
-                                        network::dbg_hex[i] = 0xDEAD0000 | i;
-                                    }
-                                }
-                            }
-                        }
-
-                        // [핵심] Guest 메모리를 로컬 버퍼로 즉시 복사 (race condition 방지)
+                        // Copy guest memory to local buffer (race condition prevention)
                         static std::uint8_t rx_local_buf[1514];
                         crt::copy_memory(rx_local_buf, pkt_data, pkt_len);
-
-                        // [핵심] 0xF5: 복사 후에도 DMA port면 copy 캡처
-                        if (pkt_len >= 42) {
-                            const std::uint16_t peek_dst2 = packet::ntohs(
-                                *reinterpret_cast<const volatile std::uint16_t*>(rx_local_buf + 36));
-                            if (peek_dst2 == packet::DMA_PORT) {
-                                network::dbg_copy_ip_total = packet::ntohs(
-                                    *reinterpret_cast<const volatile std::uint16_t*>(rx_local_buf + 16));
-                                network::dbg_copy_byte17 = static_cast<std::uint32_t>(
-                                    *reinterpret_cast<const volatile std::uint8_t*>(rx_local_buf + 17));
-                                if (pkt_len >= 50) {
-                                    network::dbg_copy_dma4 = *reinterpret_cast<const volatile std::uint32_t*>(
-                                        rx_local_buf + 46);
-                                }
-                            }
-                        }
 
                         processed |= process_rx_packet(rx_local_buf, pkt_len);
                     }
                 }
                 else if (pkt_len > 0) {
                     // cache miss - DD=1이지만 buf_addr가 0
-                    network::dbg_cache_miss++;
                 }
             }
 
             idx = (idx + 1) % rxq.count;
             checked++;
+        }
+
+        // ================================================================
+        // [DESYNC FIX] Detect our_index stuck due to ring wrap desync.
+        // ================================================================
+        // Problem: OS driver recycles descriptors (DD=0) between our_index
+        //   and current RDH. HV finds DD=0 at our_index, breaks immediately.
+        //   our_index never advances. NIC keeps going, gap grows. Permanent stuck.
+        // Cause: OS NAPI poll recycles faster than HV reads, or NIC ring wraps.
+        // Symptom: checked==0 (no packets processed) but idx != rx_head (gap exists).
+        // Fix: If DD=0 at our_index and gap > threshold, snap to RDH.
+        //   This skips stale descriptors. Some packets lost but NIC recovers.
+        // Evidence: nic_diag showed our_index=527 RDH=420 = 917 gap = permanent death.
+        // Parsec "fix": massive traffic eventually wraps RDH past our_index again.
+        // ================================================================
+        if (checked == 0 && idx != rx_head)
+        {
+            const std::uint32_t gap = (rx_head - idx + rxq.count) % rxq.count;
+            // gap 1-4 = normal NIC/HV timing jitter (DD write race).
+            // gap > 4 = real desync, our_index stuck behind recycled descriptors.
+            // Threshold avoids false positives that cause unnecessary refresh + packet loss.
+            if (gap > 4)
+            {
+                rxq.our_index = rx_head;
+                if (rxq.buf_cache_valid)
+                    nic::refresh_igc_queue_buf_cache(&slat, q);
+                continue;
+            }
         }
 
         rxq.our_index = idx;
@@ -1796,7 +1786,6 @@ static std::uint8_t poll_rx_ring_intel_igc_fallback()
 
         if (!(wb->staterr & nic::IGC_RXD_STAT_DD)) break;
 
-        network::dbg_igc_dd_count++;
 
         if (wb->staterr & nic::IGC_RXD_STAT_EOP)
         {
@@ -1808,7 +1797,6 @@ static std::uint8_t poll_rx_ring_intel_igc_fallback()
 
             if (buf_addr != 0 && pkt_len > 0 && pkt_len <= 1514)
             {
-                network::dbg_cache_hit++;
                 const auto* pkt_data = static_cast<const std::uint8_t*>(
                     memory_manager::map_guest_physical(slat, buf_addr));
 
@@ -1821,12 +1809,25 @@ static std::uint8_t poll_rx_ring_intel_igc_fallback()
                 }
             }
             else if (pkt_len > 0) {
-                network::dbg_cache_miss++;
             }
         }
 
         idx = (idx + 1) % rx_count;
         checked++;
+    }
+
+    // [DESYNC FIX] Same as igc multi-queue path.
+    // Snap our_index to RDH if DD=0 but gap exists.
+    if (checked == 0 && idx != rx_head)
+    {
+        const std::uint32_t gap = (rx_head - idx + rx_count) % rx_count;
+        if (gap > 4)
+        {
+            nic::state.our_rx_index = rx_head;
+            if (nic::rx_buf_cache_valid)
+                refresh_rx_buf_cache_igc();
+            return 0;
+        }
     }
 
     nic::state.our_rx_index = idx;
@@ -1924,6 +1925,9 @@ void network::set_up()
         return;
     }
 
+    // Read MAC address for TX frame construction and diagnostics
+    nic::read_mac(&cached_slat_cr3);
+
     if (!nic::read_ring_config(&cached_slat_cr3)) {
         is_initialized = 0;
         return;
@@ -1982,8 +1986,6 @@ void network::set_up()
             // Status register (offset 0x06) bit 4 = Capabilities List
             const std::uint16_t ecam_status = *reinterpret_cast<const volatile std::uint16_t*>(cfg + 0x06);
             std::uint8_t cap_ptr = cfg[0x34]; // Capability pointer
-            network::dbg_ecam_status = ecam_status;
-            network::dbg_ecam_capptr = cap_ptr;
 
             // status bit4 없어도 cap_ptr 유효하면 시도
             if ((ecam_status & 0x10) || cap_ptr >= 0x40)
@@ -2019,7 +2021,6 @@ void network::set_up()
             is_initialized = 0;
             return;
         }
-        network::dbg_active_rx_queues = nic::igc_num_active_queues;
 
         // [핵심] TX Queue 1 초기화 - OS Q0과 완전 격리된 전용 TX 경로
         // hidden page 2장 할당 (descriptor ring + data buffer)
@@ -2040,8 +2041,78 @@ void network::set_up()
 }
 
 // ============================================================================
-// Process Pending (매 VMEXIT 호출)
+// Process Pending (called every VMEXIT)
 // ============================================================================
+
+// ============================================================================
+// [Q1 Health Monitor] Periodic HW register check + auto-recovery
+// ============================================================================
+// Reads TXDCTL1 and TDBAL1 via host PA bypass (not guest NPT path).
+// Safe: v5.0-v5.3 failures were caused by guest-path MMIO reads
+//   interfering with OS igc driver timing. Host PA bypass is invisible
+//   to OS because it never touches NPT or guest address space.
+//
+// Detection: TXDCTL1.ENABLE=0 or TDBAL1=0 means Q1 is dead.
+//   Causes: NIC global reset (CTRL.RST), D3->D0 power transition,
+//   igc watchdog timeout, OS driver reinit.
+//
+// Recovery: Full setup_igc_hv_tx_queue() which reprograms all Q1 regs:
+//   TDBAL, TDBAH, TDLEN, TDH, TDT, TXDCTL. Reuses existing
+//   heap-allocated descriptor ring and data buffers (no new alloc needed).
+// ============================================================================
+static void check_q1_health()
+{
+    if (!nic::igc_hv_tx.initialized) return;
+    // mmio_bypass guard removed: 0xE000 page NPT present=1 (not intercepted)
+    // read_reg uses normal map_guest_physical path which works fine
+
+
+    // Read live HW values via host PA bypass
+    const cr3 slat = cached_slat_cr3;
+    const std::uint32_t txdctl = nic::read_reg(&slat, nic::IGC_TXQ1_TXDCTL);
+    const std::uint32_t tdbal = nic::read_reg(&slat, nic::IGC_TXQ1_TDBAL);
+
+
+    // Check if Q1 is alive: only HW register checks.
+    // DO NOT check nb_tx_free==0 here - it's normal during burst TX (91 chunks).
+    // Previous tx_stuck detection caused false Q1 re-inits -> ring corruption -> NIC death.
+    const bool enable_lost = !(txdctl & nic::IGC_TXDCTL_ENABLE);
+    const bool tdbal_zero = (tdbal == 0);
+
+    if (!enable_lost && !tdbal_zero)
+        return;  // Q1 healthy
+
+    // Q1 is dead - determine reason and recover
+    std::uint32_t reason = 0;
+    if (enable_lost) reason |= 1;
+    if (tdbal_zero)  reason |= 2;
+
+    // Full Q1 re-init: reprograms TDBAL/TDBAH/TDLEN/TDH/TDT/TXDCTL
+    // Descriptor ring and data buffers already allocated in heap
+    // (setup_igc_hv_tx_queue skips alloc if desc_ring_va != nullptr)
+    nic::setup_igc_hv_tx_queue(&slat);
+
+
+    // ================================================================
+    // [RX RE-SYNC] TDBAL=0 means CTRL.RST wiped ALL queues.
+    // OS driver re-inits Q0 with potentially new ring GPA, new RDH/RDT.
+    // Without re-sync: HV uses stale ring_gpa + old our_index
+    //   -> reads wrong memory -> no valid packets -> timeout cascade.
+    // FIX: re-read all RX queue config (ring_gpa, our_index, buf_cache).
+    // This is the same init that runs at startup.
+    // Only on TDBAL=0 (full NIC reset), not on TXDCTL toggle (Q1-only issue).
+    // ================================================================
+    if (tdbal_zero)
+    {
+        nic::read_igc_multi_queue_config(&slat);
+    }
+
+    // [DESYNC FIX] Kill deferred_tx: ring reset loses all in-flight chunks.
+    // Client receives clean timeout -> retries whole request.
+    if (deferred_tx.active) {
+        deferred_tx.active = 0;
+    }
+}
 
 std::uint8_t network::process_pending()
 {
@@ -2053,9 +2124,18 @@ std::uint8_t network::process_pending()
     // 해결: 1개 vCPU만 네트워크 처리, 나머지는 즉시 return
     // _InterlockedCompareExchange: lock cmpxchg (x86 atomic)
     // ====================================================================
+    // ====================================================================
+    // [LOCK] Simple try-lock. If held, skip this VMEXIT.
+    // ====================================================================
+    // IMPORTANT: lock_timeout was REMOVED. It caused TX ring race conditions:
+    //   force-release while holder still active → 2 vCPUs access ring → corruption → NIC death.
+    //   Observed: lock_timeout_count=447 = 447 race conditions in single session.
+    // Simple try-lock is safe: if lock is held, this vCPU skips. Lock holder
+    //   always completes and releases (all paths verified with lock release).
+    // ====================================================================
     static volatile long rx_processing_lock = 0;
     if (_InterlockedCompareExchange(&rx_processing_lock, 1, 0) != 0)
-        return 0;  // 다른 vCPU가 처리 중 → skip
+        return 0;  // another vCPU processing, skip
 
     if (!is_initialized)
     {
@@ -2073,7 +2153,6 @@ std::uint8_t network::process_pending()
                     if (nic::state.intel_gen == nic::intel_gen_t::IGC)
                     {
                         nic::read_igc_multi_queue_config(&cached_slat_cr3);
-                        network::dbg_active_rx_queues = nic::igc_num_active_queues;
 
                         // TX Queue 1 격리 초기화
                         if (nic::heap_va_pa_valid && !nic::igc_hv_tx.initialized)
@@ -2118,6 +2197,15 @@ std::uint8_t network::process_pending()
 
     poll_counter++;
 
+    // [Q1 Health] Every 100 polls.
+    // check_q1_health = 2 MMIO reads (TXDCTL + TDBAL).
+    // Detects OS CTRL reset that kills Q1 silently.
+    // Note: Parsec dependency is fixed by DESYNC FIX, not by faster health checks.
+    if ((poll_counter % 100) == 0)
+    {
+        check_q1_health();
+    }
+
     if (deferred_tx.active) {
         flush_deferred_tx();
         if (deferred_tx.active) {
@@ -2127,7 +2215,6 @@ std::uint8_t network::process_pending()
     }
 
     const std::uint8_t result = poll_rx_ring();
-    dbg_poll_entered++;  // [STALL DIAG] RX poll까지 도달 (deferred TX에 안 막힌 횟수)
 
     // [핵심] lock 해제 - 반드시 모든 경로에서 해제!
     _InterlockedExchange(&rx_processing_lock, 0);

@@ -360,7 +360,10 @@ typedef union
 #define CR4_TIMESTAMP_DISABLE(_)                                     (((_) >> 2) & 0x01)
 
         /**
-         * @brief Debugging Extensions
+         * @brief 
+         
+         
+         ging Extensions
          *
          * [Bit 3] References to debug registers DR4 and DR5 cause an undefined opcode (\#UD) exception to be generated when set;
          * when clear, processor aliases references to registers DR4 and DR5 for compatibility with software written to run on

@@ -12,6 +12,6 @@ C:\Users\owo\Desktop\hyperdma\uefi-boot\src\hvloader\hvloader.c(1,1): warning C4
 C:\Users\owo\Desktop\hyperdma\uefi-boot\src\winload\winload.c(23,20): warning C4189: 'hv_status': 지역 변수가 초기화되었으나 참조되지 않았습니다.
   코드를 생성하고 있습니다.
   Previous IPDB not found, fall back to full compilation.
-  All 119 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
+  All 118 functions were compiled because no usable IPDB/IOBJ from previous compilation was found.
   코드를 생성했습니다.
   uefi-boot.vcxproj -> C:\Users\owo\Desktop\hyperdma\build\x64\Release\uefi-boot.efi

@@ -212,11 +212,6 @@ namespace nic
         std::uint32_t consecutive_fail;
 
         // [진단]
-        std::uint32_t dbg_txdctl_val;
-        std::uint32_t dbg_enqueue_count;   // 총 enqueue 횟수
-        std::uint32_t dbg_commit_count;    // 총 commit 횟수
-        std::uint32_t dbg_cleanup_reclaimed; // 총 회수 slot
-        std::uint32_t dbg_ring_full_count; // ring full 발생 횟수
     };
     inline igc_hv_tx_state_t igc_hv_tx = {};
 
@@ -264,6 +259,14 @@ namespace nic
     constexpr std::uint32_t INTEL_STAT_TPT = 0x40D4;
     constexpr std::uint32_t INTEL_STAT_TOTL = 0x40D0;
     constexpr std::uint32_t INTEL_STAT_TOTH = 0x40C4;
+
+    // ========================================================================
+    // RX Statistics (read-to-clear, anti-detection)
+    // ========================================================================
+    // Used by stats shadow to hide DMA packets consumed by HV from Q0 RX
+    constexpr std::uint32_t INTEL_STAT_GPRC = 0x4074;  // Good Packets RX Count
+    constexpr std::uint32_t INTEL_STAT_GORCL = 0x4088;  // Good Octets RX Count Low
+    constexpr std::uint32_t INTEL_STAT_GORCH = 0x408C;  // Good Octets RX Count High
 
     constexpr std::uint8_t INTEL_TX_CMD_EOP = 0x01;
     constexpr std::uint8_t INTEL_TX_CMD_IFCS = 0x02;
@@ -367,20 +370,14 @@ namespace nic
     // ========================================================================
     // Debug counters
     // ========================================================================
-    inline std::uint32_t dbg_scan_total_devs = 0;
-    inline std::uint32_t dbg_scan_intel_found = 0;
-    inline std::uint32_t dbg_scan_igc_found = 0;
-    inline std::uint32_t dbg_scan_map_fail = 0;
-    inline std::uint16_t dbg_scan_last_vid = 0;
-    inline std::uint16_t dbg_scan_last_did = 0;
-    inline std::uint8_t  dbg_scan_last_bus = 0;
-    inline std::uint8_t  dbg_match_bus = 0xFF;
-    inline std::uint8_t  dbg_fail_step = 0;
-    inline std::uint32_t dbg_bar0_raw = 0;
-    inline std::uint8_t  dbg_class = 0;
-    inline std::uint8_t  dbg_subclass = 0;
-    inline std::uint16_t dbg_pci_cmd_before = 0;
-    inline std::uint16_t dbg_pci_cmd_after = 0;
+
+    // [NIC SELECT] BUS-based selection debug
+
+    // [BOOT CONFIG] Target NIC PCI bus number from UEFI boot
+    // Set by entry_point at HV init, before first discover_nic call.
+    // 0xFF = auto-select (highest bus heuristic).
+    inline std::uint8_t  boot_target_bus = 0xFF;
+    inline std::uint8_t  boot_target_bus_set = 0;  // 1 if configured via hvnic.cfg
 
     // ========================================================================
     // Functions
@@ -417,13 +414,31 @@ namespace nic
     void reset_tx_ring(const void* slat_cr3);
 
     // ========================================================================
-    // [EPT MMIO Intercept] TXQ1 쓰기 차단
+    // [MMIO Bypass] Host-PA direct HW access for protected page
     // ========================================================================
-    // BAR0+0xE000 page를 EPT에서 read-only로 설정
-    // Guest가 TXQ1(0xE040-0xE068)에 write → 무시 (advance RIP)
-    // Guest가 TXQ0/Q2/Q3에 write → 일시 허용 후 재보호
+    // When mmio_intercept sets NPT present=0 on BAR0+0xE000:
+    //   Guest access -> NPF -> shadow page swap (AC sees Q1=0)
+    //   HV access    -> bypass via map_host_physical (real HW, no NPT walk)
     //
-    // TXQ1 offset range (BAR0 기준):
+    // Set by mmio_intercept::set_up() after saving real_mmio_pfn.
+    // Checked by read_reg/write_reg on every call (branch-predicted hot path).
+    //
+    // AC invisibility: map_host_physical uses host PA directly.
+    //   Guest NPT has present=0 -> guest can't access without NPF.
+    //   HV uses host VA -> completely bypasses NPT -> invisible to guest.
+    // ========================================================================
+    inline std::uint64_t mmio_bypass_host_pa = 0;  // real_mmio_pfn << 12
+    inline std::uint64_t mmio_bypass_page_gpa = 0;  // BAR0 + 0xE000 (for offset match)
+    inline std::uint8_t  mmio_bypass_active = 0;  // set after mmio_intercept::set_up()
+
+    // ========================================================================
+    // [EPT MMIO Intercept] TXQ1 write blocking (legacy Intel EPT path)
+    // ========================================================================
+    // BAR0+0xE000 page EPT read-only protection
+    // Guest TXQ1(0xE040-0xE068) write -> drop (advance RIP)
+    // Guest TXQ0/Q2/Q3 write -> temporary allow, then re-protect
+    //
+    // TXQ1 offset range (BAR0 base):
     //   0xE040 TDBAL, 0xE044 TDBAH, 0xE048 TDLEN
     //   0xE050 TDH, 0xE058 TDT, 0xE068 TXDCTL
     // ========================================================================
@@ -431,11 +446,9 @@ namespace nic
     {
         inline std::uint64_t txq_page_gpa = 0;       // BAR0 + 0xE000 (page-aligned GPA)
         inline std::uint8_t  enabled = 0;             // EPT protection active
-        inline std::uint8_t  reprotect_pending = 0;   // passthrough 후 재보호 필요
-        inline std::uint32_t dbg_txq1_blocked = 0;    // TXQ1 쓰기 차단 횟수
-        inline std::uint32_t dbg_passthrough = 0;     // non-TXQ1 쓰기 통과 횟수
+        inline std::uint8_t  reprotect_pending = 0;   // reprotect needed after passthrough
 
-        // TXQ1 register range (page 내 offset)
+        // TXQ1 register range (in-page offset)
         constexpr std::uint32_t TXQ1_OFFSET_START = 0x040;  // 0xE040 & 0xFFF
         constexpr std::uint32_t TXQ1_OFFSET_END = 0x070;  // 0xE068 + 4 = 0xE06C, round up
     }

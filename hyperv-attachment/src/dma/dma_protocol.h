@@ -31,7 +31,40 @@
 
 namespace dma
 {
-    // : "HVD0" - NIC    
+    // ========================================================================
+    // Wire Obfuscation — XOR scramble UDP payload to defeat NDIS DPI
+    // ========================================================================
+    // Problem: VGK kernel NDIS filter sees all Q0 RX packets including our
+    //   DMA requests. Magic 0x48564430 + fixed header structure = DPI signature.
+    // Solution: XOR entire UDP payload with static 16-byte key.
+    //   Both sides (HV + LeechCore client) apply same key.
+    //   Magic never appears in cleartext on wire.
+    //   Must match XOR key in device_fpga.c!
+    // ========================================================================
+    constexpr std::uint32_t WIRE_XOR_KEY[4] = {
+        0xA7B3C9D1, 0xE5F20384, 0x19284756, 0x6B7A8D9C
+    };
+
+    inline void wire_xor(std::uint8_t* buf, std::uint32_t len)
+    {
+        // XOR in 4-byte chunks for speed (Ring-1 hot path)
+        auto* p32 = reinterpret_cast<std::uint32_t*>(buf);
+        const std::uint32_t full = len / 4;
+        for (std::uint32_t i = 0; i < full; i++)
+            p32[i] ^= WIRE_XOR_KEY[i & 3];
+
+        // Tail bytes (0-3 remaining)
+        const std::uint32_t tail_start = full * 4;
+        if (tail_start < len) {
+            std::uint32_t tail_key = WIRE_XOR_KEY[full & 3];
+            for (std::uint32_t i = tail_start; i < len; i++) {
+                buf[i] ^= static_cast<std::uint8_t>(tail_key);
+                tail_key >>= 8;
+            }
+        }
+    }
+
+    // Protocol magic (post-XOR, only used for internal validation after decrypt)
     constexpr std::uint32_t PROTOCOL_MAGIC = 0x48564430;
 
     //  
@@ -105,7 +138,7 @@ namespace dma
     };
     static_assert(sizeof(scatter_entry_t) == 16);
 
-    // Open  
+    // Open response data
     struct open_rsp_data_t
     {
         std::uint64_t pa_max;           // Guest  
